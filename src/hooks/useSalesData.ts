@@ -5,7 +5,6 @@
 import { useState, useEffect, useCallback } from "react";
 import type { Sale } from "@/lib/types";
 import { useToast } from "@/hooks/use-toast";
-import { getSales } from "@/lib/firestoreService";
 import type { QueryDocumentSnapshot } from "firebase/firestore";
 import type { DateRange } from "react-day-picker";
 import { startOfYear } from "date-fns";
@@ -28,15 +27,14 @@ export function useSalesData(fetchAllInitially: boolean = false, dateRange?: Dat
     setHasMore(true); // Reset pagination state on refetch
     
     try {
-      const { sales: fetchedSales, lastVisible: newLastVisible } = await getSales(undefined, dateRange, staffId);
-      
+      const res = await fetch('/api/sales');
+      if (!res.ok) throw new Error('Failed to fetch sales');
+      const fetchedSales = await res.json();
       const processedSales = fetchedSales.map((s: any) => ({...s, saleDate: new Date(s.saleDate)}));
 
       setSales(processedSales);
-      setLastVisible(newLastVisible);
-      if (!newLastVisible || fetchedSales.length < PAGE_SIZE) {
-        setHasMore(false); 
-      }
+      setLastVisible(null);
+      setHasMore(false);
       
       if (fetchAllInitially && !dateRange && !staffId) {
         localStorage.setItem(CACHE_KEY, JSON.stringify(processedSales));
@@ -79,13 +77,13 @@ export function useSalesData(fetchAllInitially: boolean = false, dateRange?: Dat
         setError(null);
         setHasMore(true);
         try {
-            const { sales: initialSales, lastVisible: newLastVisible } = await getSales(undefined, dateRange, staffId);
+            const res = await fetch('/api/sales');
+            if (!res.ok) throw new Error('Failed to fetch sales');
+            const initialSales = await res.json();
             const processedSales = initialSales.map((s: any) => ({...s, saleDate: new Date(s.saleDate)}));
             setSales(processedSales);
-            setLastVisible(newLastVisible);
-            if (!newLastVisible || initialSales.length < PAGE_SIZE) {
-                setHasMore(false);
-            }
+            setLastVisible(null);
+            setHasMore(false);
         } catch (err: any) {
             const errorMessage = err.message || "An error occurred fetching initial sales.";
             setError(errorMessage);
@@ -102,13 +100,13 @@ export function useSalesData(fetchAllInitially: boolean = false, dateRange?: Dat
     if (!hasMore || isLoading) return;
     setIsLoading(true);
     try {
-      const { sales: newSales, lastVisible: newLastVisible } = await getSales(lastVisible, dateRange, staffId);
+      const res = await fetch('/api/sales');
+      if (!res.ok) throw new Error('Failed to fetch sales');
+      const newSales = await res.json();
       const processedSales = newSales.map((s: any) => ({...s, saleDate: new Date(s.saleDate)}));
       setSales(prev => [...prev, ...processedSales]);
-      setLastVisible(newLastVisible);
-      if (!newLastVisible || newSales.length < PAGE_SIZE) {
-        setHasMore(false);
-      }
+      setLastVisible(null);
+      setHasMore(false);
     } catch (err: any) {
       const errorMessage = err.message || "An unknown error occurred while fetching more sales.";
       setError(errorMessage);

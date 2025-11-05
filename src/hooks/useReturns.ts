@@ -4,7 +4,6 @@
 import { useState, useEffect, useCallback } from "react";
 import type { ReturnTransaction } from "@/lib/types";
 import { useToast } from "@/hooks/use-toast";
-import { getReturns } from "@/lib/firestoreService";
 import type { DateRange } from "react-day-picker";
 import type { QueryDocumentSnapshot } from "firebase/firestore";
 
@@ -24,12 +23,12 @@ export function useReturns(fetchAll: boolean = false, dateRange?: DateRange, sta
     setError(null);
     setHasMore(true);
     try {
-      const { returns: initialReturns, lastVisible: newLastVisible } = await getReturns(undefined, dateRange, staffId);
+      const res = await fetch('/api/returns/history');
+      if (!res.ok) throw new Error('Failed to fetch returns');
+      const initialReturns = await res.json();
       setReturns(initialReturns);
-      setLastVisible(newLastVisible);
-      if (!newLastVisible || initialReturns.length < PAGE_SIZE) {
-        setHasMore(false);
-      }
+      setLastVisible(null);
+      setHasMore(false);
     } catch (err: any) {
       const errorMessage = err.message || "An unknown error occurred while fetching returns.";
       setError(errorMessage);
@@ -47,12 +46,12 @@ export function useReturns(fetchAll: boolean = false, dateRange?: DateRange, sta
     if (!hasMore || isLoading) return;
     setIsLoading(true);
     try {
-      const { returns: newReturns, lastVisible: newLastVisible } = await getReturns(lastVisible, dateRange, staffId);
+      const res = await fetch('/api/returns/history');
+      if (!res.ok) throw new Error('Failed to fetch returns');
+      const newReturns = await res.json();
       setReturns(prev => [...prev, ...newReturns]);
-      setLastVisible(newLastVisible);
-      if (!newLastVisible || newReturns.length < PAGE_SIZE) {
-        setHasMore(false);
-      }
+      setLastVisible(null);
+      setHasMore(false);
     } catch (err: any) {
       const errorMessage = err.message || "An unknown error occurred while fetching more returns.";
       setError(errorMessage);

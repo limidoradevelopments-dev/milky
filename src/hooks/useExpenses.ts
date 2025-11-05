@@ -4,7 +4,6 @@
 import { useState, useEffect, useCallback } from "react";
 import type { Expense } from "@/lib/types";
 import { useToast } from "@/hooks/use-toast";
-import { getExpenses } from "@/lib/firestoreService";
 import type { DateRange } from "react-day-picker";
 
 const API_BASE_URL = "/api/expenses";
@@ -19,7 +18,9 @@ export function useExpenses(initialFetch: boolean = false, dateRange?: DateRange
     setIsLoading(true);
     setError(null);
     try {
-      const fetchedExpenses = await getExpenses(range, sId);
+      const res = await fetch(API_BASE_URL);
+      if (!res.ok) throw new Error('Failed to fetch expenses');
+      const fetchedExpenses = await res.json();
       setExpenses(fetchedExpenses);
     } catch (err: any) {
       const errorMessage = err.message || "Could not load expenses.";

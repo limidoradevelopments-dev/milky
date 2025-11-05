@@ -17,7 +17,6 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Info, PlusCircle, Trash2, ChevronsUpDown, PackageSearch, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ProductService } from "@/lib/productService";
-import { StockService } from "@/lib/stockService";
 import { useAuth } from "@/contexts/AuthContext";
 import type { Product, StockTransaction, StockTransactionType, Vehicle } from "@/lib/types";
 import { useProducts } from "@/hooks/useProducts";
@@ -215,23 +214,31 @@ export function ManageStockForm() {
 
             if (transactionType === "UNLOAD_FROM_VEHICLE") {
                 // First, record the UNLOAD from vehicle (no change to main stock)
-                await StockService.createTransaction({
+                await fetch('/api/stock-transactions', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
                     ...baseTransactionData,
                     type: 'UNLOAD_FROM_VEHICLE',
                     previousStock: previousStock,
                     newStock: previousStock, 
                     vehicleId: selectedVehicleId,
                     endMeter: endMeter ? Number(endMeter) : undefined,
+                    })
                 });
 
                 // Then, record the ADD to main inventory and update the product
                 newStock = previousStock + quantity;
-                await StockService.createTransaction({
+                await fetch('/api/stock-transactions', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
                     ...baseTransactionData,
                     type: 'ADD_STOCK_INVENTORY',
                     previousStock: previousStock,
                     newStock: newStock,
                     notes: `Unloaded from vehicle ${selectedVehicleId}`
+                    })
                 });
                 await ProductService.updateProduct(product.id, { stock: newStock });
 
@@ -247,13 +254,17 @@ export function ManageStockForm() {
                         break;
                 }
                 
-                await StockService.createTransaction({
+                await fetch('/api/stock-transactions', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
                     ...baseTransactionData,
                     type: transactionType,
                     previousStock: previousStock,
                     newStock: newStock,
                     vehicleId: (transactionType === 'LOAD_TO_VEHICLE') ? selectedVehicleId : undefined,
                     startMeter: transactionType === 'LOAD_TO_VEHICLE' && startMeter ? Number(startMeter) : undefined,
+                    })
                 });
                 await ProductService.updateProduct(product.id, { stock: newStock });
             }

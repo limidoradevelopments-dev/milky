@@ -14,7 +14,6 @@ import { useToast } from "@/hooks/use-toast";
 import { Badge } from "@/components/ui/badge";
 import { ChevronsUpDown, PackageSearch, Loader2, Trash2, Check, ArrowRight } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { StockService } from "@/lib/stockService";
 import { useAuth } from "@/contexts/AuthContext";
 import type { Product, StockTransaction, Customer, Vehicle } from "@/lib/types";
 import { useProducts } from "@/hooks/useProducts";
@@ -181,7 +180,11 @@ export function SampleIssuingForm() {
             userId: currentUser?.username || 'system',
         };
 
-        await StockService.createTransaction(transactionData);
+        await fetch('/api/stock-transactions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(transactionData),
+        });
       }
 
       toast({

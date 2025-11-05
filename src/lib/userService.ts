@@ -1,3 +1,4 @@
+import 'server-only';
 import prisma from "./prisma";
 import { type User } from "./types";
 

@@ -84,7 +84,7 @@ model Product {
   stock        Int              @default(0)
   imageUrl     String?
   description  String?
-  sku          String?          @unique
+  sku          String?         
   reorderLevel Int?
   aiHint       String?
   createdAt    DateTime         @default(now())

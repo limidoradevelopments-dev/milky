@@ -4,7 +4,6 @@
 import { useState, useEffect, useCallback } from "react";
 import type { Vehicle } from "@/lib/types";
 import { useToast } from "@/hooks/use-toast";
-import { VehicleService } from "@/lib/vehicleService";
 
 const API_BASE_URL = "/api/vehicles";
 const CACHE_KEY = "vehiclesCache";
@@ -19,7 +18,9 @@ export function useVehicles() {
     setIsLoading(true);
     setError(null);
     try {
-        const fetchedVehicles = await VehicleService.getAllVehicles();
+        const response = await fetch(API_BASE_URL);
+        if (!response.ok) throw new Error('Failed to fetch vehicles');
+        const fetchedVehicles = await response.json();
         const sortedVehicles = fetchedVehicles.sort((a, b) => a.vehicleNumber.localeCompare(b.vehicleNumber));
         setVehicles(sortedVehicles);
         localStorage.setItem(CACHE_KEY, JSON.stringify(sortedVehicles));

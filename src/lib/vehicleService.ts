@@ -1,5 +1,4 @@
-
-
+import 'server-only';
 import prisma from "./prisma";
 import { Vehicle } from "./types";
 

@@ -4,7 +4,6 @@
 import { useState, useEffect, useCallback } from "react";
 import type { Customer } from "@/lib/types";
 import { useToast } from "@/hooks/use-toast";
-import { getCustomers, getPaginatedCustomers } from "@/lib/firestoreService";
 import type { QueryDocumentSnapshot } from "firebase/firestore";
 
 const API_BASE_URL = "/api/customers";
@@ -23,7 +22,9 @@ export function useCustomers(paginated: boolean = false) {
     setIsLoading(true);
     setError(null);
     try {
-      const fetchedCustomers = await getCustomers();
+      const response = await fetch(API_BASE_URL);
+      if (!response.ok) throw new Error('Failed to fetch customers');
+      const fetchedCustomers = await response.json();
       setCustomers(fetchedCustomers);
       localStorage.setItem(CACHE_KEY, JSON.stringify(fetchedCustomers));
     } catch (err: any) {
@@ -44,12 +45,12 @@ export function useCustomers(paginated: boolean = false) {
     setError(null);
     setHasMore(true);
     try {
-      const { customers: initialCustomers, lastVisible: newLastVisible } = await getPaginatedCustomers();
+      const response = await fetch(API_BASE_URL);
+      if (!response.ok) throw new Error('Failed to fetch customers');
+      const initialCustomers = await response.json();
       setCustomers(initialCustomers);
-      setLastVisible(newLastVisible);
-      if (!newLastVisible) {
-        setHasMore(false);
-      }
+      setLastVisible(null);
+      setHasMore(false);
     } catch (err: any) {
         const errorMessage = err.message || "An unknown error occurred while fetching customers.";
         setError(errorMessage);
@@ -63,12 +64,12 @@ export function useCustomers(paginated: boolean = false) {
     if (!hasMore || isLoading) return;
     setIsLoading(true);
     try {
-      const { customers: newCustomers, lastVisible: newLastVisible } = await getPaginatedCustomers(lastVisible);
+      const response = await fetch(API_BASE_URL);
+      if (!response.ok) throw new Error('Failed to fetch customers');
+      const newCustomers = await response.json();
       setCustomers(prev => [...prev, ...newCustomers]);
-      setLastVisible(newLastVisible);
-      if (!newLastVisible) {
-        setHasMore(false);
-      }
+      setLastVisible(null);
+      setHasMore(false);
     } catch (err: any)      {
         const errorMessage = err.message || "An unknown error occurred while fetching more customers.";
         setError(errorMessage);
