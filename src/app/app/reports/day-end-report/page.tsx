@@ -2,7 +2,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo } from "react";
-import { CalendarClock, FileText, DownloadCloud, ReceiptText, Banknote, Building, Newspaper, CreditCard, AlertTriangle, ArrowDown, ArrowUp, Beaker, Wallet, Landmark, Gift } from "lucide-react";
+import { CalendarClock, FileText, DownloadCloud, ReceiptText, Banknote, Building, Newspaper, CreditCard, AlertTriangle, ArrowDown, ArrowUp, Beaker, Wallet, Landmark, Gift, Undo2, RefreshCw, DollarSign, Coins } from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -150,6 +150,35 @@ export default function DayEndReportPage() {
       const creditSalesCount = salesToday.filter(s => s.initialOutstandingBalance && s.initialOutstandingBalance > 0).length;
       const creditSettledByReturns = returnsToday.reduce((sum, r) => sum + (r.settleOutstandingAmount || 0), 0);
 
+      // --- Returns Breakdown Calculations ---
+      const totalReturnsCount = returnsToday.length;
+      
+      // Returns by exchange (customer exchanges damaged products for new ones - customer may pay difference)
+      const returnsByExchange = returnsToday.reduce((sum, r) => {
+        if (r.exchangedItems && r.exchangedItems.length > 0) {
+          // Exchange value = what customer paid for the exchange (amountPaid - changeGiven)
+          // This represents the net cash received from exchange transactions
+          const exchangeAmountPaid = (r.amountPaid || 0) - (r.changeGiven || 0);
+          return sum + exchangeAmountPaid;
+        }
+        return sum;
+      }, 0);
+      
+      // Returns by refund (credit added to customer account)
+      const returnsByRefund = returnsToday.reduce((sum, r) => sum + (r.refundAmount || 0), 0);
+      
+      // Returns by cash paid out (physical cash given back to customer)
+      const returnsByCashPaidOut = returnsToday.reduce((sum, r) => sum + (r.cashPaidOut || 0), 0);
+      
+      // Returns that settled outstanding credit
+      const returnsByCreditSettled = creditSettledByReturns;
+      
+      // Total return value (sum of all return transaction values)
+      const totalReturnValue = returnsToday.reduce((sum, r) => {
+        const returnedValue = r.returnedItems.reduce((itemSum, item) => itemSum + (item.appliedPrice * item.quantity), 0);
+        return sum + returnedValue;
+      }, 0);
+
       // --- Sample Calculations ---
       const totalSamplesIssuedCount = samplesIssuedToday.reduce((sum, tx) => sum + tx.quantity, 0);
       const sampleTransactionsCount = samplesIssuedToday.length;
@@ -187,6 +216,14 @@ export default function DayEndReportPage() {
         sampleTransactionsCount,
         totalFreeItemsCount,
         totalFreeItemsValue,
+        
+        // Returns breakdown
+        totalReturnsCount,
+        returnsByExchange,
+        returnsByRefund,
+        returnsByCashPaidOut,
+        returnsByCreditSettled,
+        totalReturnValue,
       });
 
     } else {
@@ -417,6 +454,21 @@ export default function DayEndReportPage() {
                 <CardContent className="space-y-2 text-sm">
                     <p className="flex justify-between"><span>Total Free Items:</span> <span className="font-semibold">{reportSummary.totalFreeItemsCount || 0}</span></p>
                     <p className="flex justify-between"><span>Cost of Free Items:</span> <span className="font-semibold">{formatCurrency(reportSummary.totalFreeItemsValue || 0)}</span></p>
+                </CardContent>
+            </Card>
+
+            <Card>
+                <CardHeader>
+                    <CardTitle className="text-lg flex items-center gap-2"><Undo2 className="h-5 w-5 text-orange-600"/>Total Returns</CardTitle>
+                    <CardDescription>Returns processed today - {reportSummary.totalReturnsCount} transaction(s)</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-2 text-sm">
+                    <p className="flex justify-between"><span className="flex items-center gap-1"><RefreshCw className="h-3.5 w-3.5"/>Exchange:</span> <span className="font-semibold text-blue-600">{formatCurrency(reportSummary.returnsByExchange)}</span></p>
+                    <p className="flex justify-between"><span className="flex items-center gap-1"><DollarSign className="h-3.5 w-3.5"/>Refund (Credit):</span> <span className="font-semibold text-purple-600">{formatCurrency(reportSummary.returnsByRefund)}</span></p>
+                    <p className="flex justify-between"><span className="flex items-center gap-1"><Coins className="h-3.5 w-3.5"/>Cash Paid Out:</span> <span className="font-semibold text-destructive">{formatCurrency(reportSummary.returnsByCashPaidOut)}</span></p>
+                    <p className="flex justify-between"><span className="flex items-center gap-1"><CreditCard className="h-3.5 w-3.5"/>Credit Settled:</span> <span className="font-semibold text-green-600">{formatCurrency(reportSummary.returnsByCreditSettled)}</span></p>
+                    <Separator className="my-2"/>
+                    <p className="flex justify-between font-bold text-base"><span>Total Return Value:</span> <span className="text-orange-600">{formatCurrency(reportSummary.totalReturnValue)}</span></p>
                 </CardContent>
             </Card>
           </div>

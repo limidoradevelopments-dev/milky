@@ -906,6 +906,14 @@ export interface DayEndReportSummary {
   sampleTransactionsCount: number;
   totalFreeItemsCount?: number;
   totalFreeItemsValue?: number;
+  
+  // Returns breakdown
+  totalReturnsCount: number;
+  returnsByExchange: number;
+  returnsByRefund: number;
+  returnsByCashPaidOut: number;
+  returnsByCreditSettled: number;
+  totalReturnValue: number;
 }
 
 

@@ -434,28 +434,65 @@ export const getReturns = async (_lastVisible?: any, dateRange?: DateRange, staf
   const where: any = {};
   if (dateRange?.from) where.returnDate = { gte: dateRange.from, ...(dateRange?.to ? { lte: dateRange.to } : {}) };
   if (staffId) where.staffId = staffId;
-  const rows = await prisma.returnTransaction.findMany({ where, orderBy: { returnDate: 'desc' }, take: PAGE_SIZE });
-  const returns: ReturnTransaction[] = rows.map(r => ({
-    id: r.id,
-    originalSaleId: r.originalSaleId,
-    returnDate: r.returnDate,
-    staffId: r.staffId,
-    customerId: r.customerId || undefined,
-    customerName: r.customerName || undefined,
-    customerShopName: r.customerShopName || undefined,
-    returnedItems: [],
-    exchangedItems: [],
-    notes: r.notes || undefined,
-    amountPaid: r.amountPaid ? Number(r.amountPaid) : undefined,
-    paymentSummary: r.paymentSummary || undefined,
-    chequeDetails: r.chequeNumber ? { number: r.chequeNumber, bank: r.chequeBank || undefined, date: r.chequeDate || undefined, amount: r.chequeAmount ? Number(r.chequeAmount) : undefined } : undefined,
-    bankTransferDetails: r.bankName ? { bankName: r.bankName, referenceNumber: r.referenceNumber || undefined, amount: r.bankAmount ? Number(r.bankAmount) : undefined } : undefined,
-    changeGiven: r.changeGiven ? Number(r.changeGiven) : undefined,
-    settleOutstandingAmount: r.settleOutstandingAmount ? Number(r.settleOutstandingAmount) : undefined,
-    refundAmount: r.refundAmount ? Number(r.refundAmount) : undefined,
-    cashPaidOut: r.cashPaidOut ? Number(r.cashPaidOut) : undefined,
-    createdAt: r.createdAt || undefined,
-  }));
+  const rows = await prisma.returnTransaction.findMany({ 
+    where, 
+    include: { items: true },
+    orderBy: { returnDate: 'desc' }, 
+    take: PAGE_SIZE 
+  });
+  
+  const returns: ReturnTransaction[] = rows.map(r => {
+    // Separate returned and exchanged items
+    const returnedItems: CartItem[] = r.items
+      .filter(item => item.lineType === 'returned')
+      .map(item => ({
+        id: item.productId,
+        quantity: item.quantity,
+        appliedPrice: Number(item.appliedPrice),
+        saleType: item.saleType as any,
+        name: item.name,
+        category: item.category as any,
+        price: Number(item.price),
+        sku: item.sku || undefined,
+        isOfferItem: item.isOfferItem,
+      }));
+    
+    const exchangedItems: CartItem[] = r.items
+      .filter(item => item.lineType === 'exchanged')
+      .map(item => ({
+        id: item.productId,
+        quantity: item.quantity,
+        appliedPrice: Number(item.appliedPrice),
+        saleType: item.saleType as any,
+        name: item.name,
+        category: item.category as any,
+        price: Number(item.price),
+        sku: item.sku || undefined,
+        isOfferItem: item.isOfferItem,
+      }));
+    
+    return {
+      id: r.id,
+      originalSaleId: r.originalSaleId,
+      returnDate: r.returnDate,
+      staffId: r.staffId,
+      customerId: r.customerId || undefined,
+      customerName: r.customerName || undefined,
+      customerShopName: r.customerShopName || undefined,
+      returnedItems,
+      exchangedItems,
+      notes: r.notes || undefined,
+      amountPaid: r.amountPaid ? Number(r.amountPaid) : undefined,
+      paymentSummary: r.paymentSummary || undefined,
+      chequeDetails: r.chequeNumber ? { number: r.chequeNumber, bank: r.chequeBank || undefined, date: r.chequeDate || undefined, amount: r.chequeAmount ? Number(r.chequeAmount) : undefined } : undefined,
+      bankTransferDetails: r.bankName ? { bankName: r.bankName, referenceNumber: r.referenceNumber || undefined, amount: r.bankAmount ? Number(r.bankAmount) : undefined } : undefined,
+      changeGiven: r.changeGiven ? Number(r.changeGiven) : undefined,
+      settleOutstandingAmount: r.settleOutstandingAmount ? Number(r.settleOutstandingAmount) : undefined,
+      refundAmount: r.refundAmount ? Number(r.refundAmount) : undefined,
+      cashPaidOut: r.cashPaidOut ? Number(r.cashPaidOut) : undefined,
+      createdAt: r.createdAt || undefined,
+    };
+  });
   return { returns, lastVisible: null };
 };
 
