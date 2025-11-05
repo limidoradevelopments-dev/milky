@@ -26,108 +26,162 @@ export async function PATCH(
       return NextResponse.json({ error: 'Staff ID is required for payment record' }, { status: 400 });
     }
 
-    // Fetch current sale
-    const currentSaleRow = await prisma.sale.findUnique({ where: { id: saleId } });
-    if (!currentSaleRow) {
+    // Fetch current sale with payments
+    const currentSale = await prisma.sale.findUnique({ 
+      where: { id: saleId },
+      include: { payments: true }
+    });
+    if (!currentSale) {
       return NextResponse.json({ error: 'Sale not found' }, { status: 404 });
     }
-    const currentSale: any = currentSaleRow;
-        
-        // This is the object that will be pushed to the Firestore array.
-        // It must be clean of `undefined` values.
-        // Normalize new payment (client-facing only)
-        
-        // details/notes only used to render summary; DB persists in payments table
-        
-        const totalAmountPaid = (currentSale.totalAmountPaid || 0) + paymentAmount;
-        const newOutstandingBalance = currentSale.totalAmount - totalAmountPaid;
 
-        // --- Regenerate Payment Summary ---
-        const allPayments: { method: string; amount: number; }[] = [];
-        if (currentSale.paidAmountCash) allPayments.push({ method: 'Cash', amount: currentSale.paidAmountCash });
-        if (currentSale.paidAmountCheque) allPayments.push({ method: 'Cheque', amount: currentSale.paidAmountCheque });
-        if (currentSale.paidAmountBankTransfer) allPayments.push({ method: 'BankTransfer', amount: currentSale.paidAmountBankTransfer });
-        currentSale.additionalPayments?.forEach(p => {
-            allPayments.push({ method: p.method, amount: p.amount });
-        });
-        allPayments.push({ method: paymentMethod, amount: paymentAmount });
+    // Resolve staffId to a valid user ID (accept id or username); fallback to admin
+    let staffIdFinal: string | undefined = undefined;
+    if (staffId) {
+      const byId = await prisma.user.findUnique({ where: { id: String(staffId) }, select: { id: true } });
+      if (byId) {
+        staffIdFinal = byId.id;
+      } else {
+        const byUsername = await prisma.user.findFirst({ where: { username: { equals: String(staffId), mode: 'insensitive' } }, select: { id: true } });
+        if (byUsername) staffIdFinal = byUsername.id;
+      }
+    }
+    if (!staffIdFinal) {
+      const admin = await prisma.user.findFirst({ where: { username: { equals: 'admin', mode: 'insensitive' } }, select: { id: true } });
+      if (admin) staffIdFinal = admin.id;
+    }
+    if (!staffIdFinal) {
+      return NextResponse.json({ error: 'Could not resolve staff user' }, { status: 400 });
+    }
 
-        const paymentByType = allPayments.reduce((acc, p) => {
-            acc[p.method] = (acc[p.method] || 0) + p.amount;
-            return acc;
-        }, {} as Record<string, number>);
+    const totalAmountPaid = Number(currentSale.totalAmountPaid) + paymentAmount;
+    const newOutstandingBalance = Number(currentSale.totalAmount) - totalAmountPaid;
 
-        const methodsUsed: string[] = [];
-        if (paymentByType['Cash']) methodsUsed.push(`Cash (${paymentByType['Cash'].toFixed(2)})`);
-        if (paymentByType['Cheque']) methodsUsed.push(`Cheque (${paymentByType['Cheque'].toFixed(2)})`);
-        if (paymentByType['BankTransfer']) methodsUsed.push(`Bank Transfer (${paymentByType['BankTransfer'].toFixed(2)})`);
-        
-        let newPaymentSummary = "";
-        if (methodsUsed.length > 1) {
-            newPaymentSummary = `Split (${methodsUsed.join(' + ')})`;
-        } else if (methodsUsed.length === 1) {
-            newPaymentSummary = methodsUsed[0];
-        } else {
-            newPaymentSummary = "N/A";
-        }
+    // --- Regenerate Payment Summary ---
+    const allPayments: { method: string; amount: number; }[] = [];
+    if (currentSale.paidAmountCash) allPayments.push({ method: 'Cash', amount: Number(currentSale.paidAmountCash) });
+    if (currentSale.paidAmountCheque) allPayments.push({ method: 'Cheque', amount: Number(currentSale.paidAmountCheque) });
+    if (currentSale.paidAmountBankTransfer) allPayments.push({ method: 'BankTransfer', amount: Number(currentSale.paidAmountBankTransfer) });
+    // Include existing payments from Payment table
+    currentSale.payments.forEach(p => {
+      allPayments.push({ method: p.method, amount: Number(p.amount) });
+    });
+    allPayments.push({ method: paymentMethod, amount: paymentAmount });
 
-        if (newOutstandingBalance > 0) {
-            newPaymentSummary = `Partial (${newPaymentSummary}) - Outstanding: ${newOutstandingBalance.toFixed(2)}`;
-        }
-        // --- End of Payment Summary Logic ---
+    const paymentByType = allPayments.reduce((acc, p) => {
+      acc[p.method] = (acc[p.method] || 0) + p.amount;
+      return acc;
+    }, {} as Record<string, number>);
 
-        const updatedData = {
-            totalAmountPaid,
-            outstandingBalance: newOutstandingBalance < 0 ? 0 : newOutstandingBalance,
-            additionalPayments: arrayUnion(paymentForFirestore),
-            paymentSummary: newPaymentSummary, // Add the updated summary
-            updatedAt: Timestamp.now()
-        };
-        
-        // Persist a new payment row (optional; depends on your flow)
-        await prisma.payment.create({
-          data: {
-            saleId: saleId,
-            amount: paymentAmount,
-            method: paymentMethod,
-            date: paymentDate ? new Date(paymentDate) : new Date(),
-            notes: notes ?? null,
-            staffId: staffId,
-            chequeNumber: (details as any)?.number ?? null,
-            chequeBank: (details as any)?.bank ?? null,
-            chequeDate: (details as any)?.date ? new Date((details as any).date) : null,
-            chequeAmount: (details as any)?.amount ?? null,
-            bankName: (details as any)?.bankName ?? null,
-            referenceNumber: (details as any)?.referenceNumber ?? null,
-            bankAmount: (details as any)?.amount ?? null,
-          },
-        });
+    const methodsUsed: string[] = [];
+    if (paymentByType['Cash']) methodsUsed.push(`Cash (${paymentByType['Cash'].toFixed(2)})`);
+    if (paymentByType['Cheque']) methodsUsed.push(`Cheque (${paymentByType['Cheque'].toFixed(2)})`);
+    if (paymentByType['BankTransfer']) methodsUsed.push(`Bank Transfer (${paymentByType['BankTransfer'].toFixed(2)})`);
+    
+    let newPaymentSummary = "";
+    if (methodsUsed.length > 1) {
+      newPaymentSummary = `Split (${methodsUsed.join(' + ')})`;
+    } else if (methodsUsed.length === 1) {
+      newPaymentSummary = methodsUsed[0];
+    } else {
+      newPaymentSummary = "N/A";
+    }
 
-        await prisma.sale.update({
-          where: { id: saleId },
-          data: {
-            totalAmountPaid,
-            outstandingBalance: updatedData.outstandingBalance,
-            paymentSummary: updatedData.paymentSummary,
-          },
-        });
+    if (newOutstandingBalance > 0) {
+      newPaymentSummary = `Partial (${newPaymentSummary}) - Outstanding: ${newOutstandingBalance.toFixed(2)}`;
+    }
+    // --- End of Payment Summary Logic ---
 
-        // This is the object that will be returned to the client.
-        const newPaymentForClient: Partial<Payment> = {
-            amount: paymentAmount,
-            method: paymentMethod,
-            date: paymentDate ? new Date(paymentDate) : new Date(),
-            staffId: staffId,
-        };
-        if (notes) newPaymentForClient.notes = notes;
-        if (details) newPaymentForClient.details = details;
-        const finalSaleState: Sale = {
-            ...currentSale,
-            totalAmountPaid: updatedData.totalAmountPaid,
-            outstandingBalance: updatedData.outstandingBalance,
-            paymentSummary: updatedData.paymentSummary, // Return new summary to client
-            additionalPayments: [...(currentSale.additionalPayments || []), newPaymentForClient as Payment]
-        }
+    // Create new payment record
+    await prisma.payment.create({
+      data: {
+        saleId: saleId,
+        amount: paymentAmount,
+        method: paymentMethod as any,
+        date: paymentDate ? new Date(paymentDate) : new Date(),
+        notes: notes ?? null,
+        staffId: staffIdFinal,
+        chequeNumber: (details as any)?.number ?? null,
+        chequeBank: (details as any)?.bank ?? null,
+        chequeDate: (details as any)?.date ? new Date((details as any).date) : null,
+        chequeAmount: (details as any)?.amount ?? null,
+        bankName: (details as any)?.bankName ?? null,
+        referenceNumber: (details as any)?.referenceNumber ?? null,
+        bankAmount: (details as any)?.amount ?? null,
+      },
+    });
+
+    // Update sale with new totals
+    const updatedSale = await prisma.sale.update({
+      where: { id: saleId },
+      data: {
+        totalAmountPaid,
+        outstandingBalance: newOutstandingBalance < 0 ? 0 : newOutstandingBalance,
+        paymentSummary: newPaymentSummary,
+      },
+      include: { payments: true, items: true },
+    });
+
+    // Build response for client
+    const finalSaleState: Sale = {
+      id: updatedSale.id,
+      customerId: updatedSale.customerId || undefined,
+      customerName: updatedSale.customerName || undefined,
+      customerShopName: updatedSale.customerShopName || undefined,
+      items: updatedSale.items.map(item => ({
+        id: item.productId,
+        quantity: item.quantity,
+        appliedPrice: Number(item.appliedPrice),
+        saleType: item.saleType as any,
+        name: item.name,
+        category: item.category as any,
+        price: Number(item.price),
+        sku: item.sku || undefined,
+        imageUrl: item.imageUrl || undefined,
+        isOfferItem: item.isOfferItem,
+        returnedQuantity: item.returnedQuantity || undefined,
+      })),
+      subTotal: Number(updatedSale.subTotal),
+      discountPercentage: Number(updatedSale.discountPercentage),
+      discountAmount: Number(updatedSale.discountAmount),
+      totalAmount: Number(updatedSale.totalAmount),
+      paidAmountCash: updatedSale.paidAmountCash ? Number(updatedSale.paidAmountCash) : undefined,
+      paidAmountCheque: updatedSale.paidAmountCheque ? Number(updatedSale.paidAmountCheque) : undefined,
+      paidAmountBankTransfer: updatedSale.paidAmountBankTransfer ? Number(updatedSale.paidAmountBankTransfer) : undefined,
+      creditUsed: updatedSale.creditUsed ? Number(updatedSale.creditUsed) : undefined,
+      totalAmountPaid: Number(updatedSale.totalAmountPaid),
+      outstandingBalance: Number(updatedSale.outstandingBalance),
+      initialOutstandingBalance: updatedSale.initialOutstandingBalance ? Number(updatedSale.initialOutstandingBalance) : undefined,
+      changeGiven: updatedSale.changeGiven ? Number(updatedSale.changeGiven) : undefined,
+      paymentSummary: updatedSale.paymentSummary,
+      saleDate: updatedSale.saleDate,
+      staffId: updatedSale.staffId,
+      staffName: updatedSale.staffName || undefined,
+      vehicleId: updatedSale.vehicleId || undefined,
+      offerApplied: updatedSale.offerApplied,
+      status: updatedSale.status as any,
+      cancellationReason: updatedSale.cancellationReason || undefined,
+      createdAt: updatedSale.createdAt || undefined,
+      updatedAt: updatedSale.updatedAt || undefined,
+      additionalPayments: updatedSale.payments.map(p => ({
+        amount: Number(p.amount),
+        method: p.method as any,
+        date: p.date,
+        staffId: p.staffId,
+        notes: p.notes || undefined,
+        details: p.chequeNumber ? {
+          number: p.chequeNumber,
+          bank: p.chequeBank || undefined,
+          date: p.chequeDate || undefined,
+          amount: p.chequeAmount ? Number(p.chequeAmount) : undefined,
+        } : p.bankName ? {
+          bankName: p.bankName,
+          referenceNumber: p.referenceNumber || undefined,
+          amount: p.bankAmount ? Number(p.bankAmount) : undefined,
+        } : undefined,
+      })),
+    };
+
     return NextResponse.json(finalSaleState);
 
   } catch (error) {

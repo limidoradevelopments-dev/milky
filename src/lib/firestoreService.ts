@@ -328,39 +328,105 @@ export const getSales = async (_lastVisible?: any, dateRange?: DateRange, staffI
   const where: any = {};
   if (dateRange?.from) where.saleDate = { gte: dateRange.from, ...(dateRange?.to ? { lte: dateRange.to } : {}) };
   if (staffId) where.staffId = staffId;
-  const rows = await prisma.sale.findMany({ where, orderBy: { saleDate: 'desc' }, take: dateRange ? PAGE_SIZE : undefined });
-  const sales: Sale[] = rows.map(s => ({
-    id: s.id,
-    items: [],
-    subTotal: Number(s.subTotal),
-    discountPercentage: Number(s.discountPercentage),
-    discountAmount: Number(s.discountAmount),
-    totalAmount: Number(s.totalAmount),
-    paidAmountCash: s.paidAmountCash ? Number(s.paidAmountCash) : undefined,
-    paidAmountCheque: s.paidAmountCheque ? Number(s.paidAmountCheque) : undefined,
-    chequeDetails: undefined,
-    paidAmountBankTransfer: s.paidAmountBankTransfer ? Number(s.paidAmountBankTransfer) : undefined,
-    bankTransferDetails: undefined,
-    creditUsed: s.creditUsed ? Number(s.creditUsed) : undefined,
-    additionalPayments: undefined,
-    totalAmountPaid: Number(s.totalAmountPaid),
-    outstandingBalance: Number(s.outstandingBalance),
-    initialOutstandingBalance: s.initialOutstandingBalance ? Number(s.initialOutstandingBalance) : undefined,
-    changeGiven: s.changeGiven ? Number(s.changeGiven) : undefined,
-    paymentSummary: s.paymentSummary,
-    saleDate: s.saleDate,
-    staffId: s.staffId,
-    staffName: s.staffName || undefined,
-    customerId: s.customerId || undefined,
-    customerName: s.customerName || undefined,
-    customerShopName: s.customerShopName || undefined,
-    offerApplied: s.offerApplied,
-    vehicleId: s.vehicleId || undefined,
-    createdAt: s.createdAt || undefined,
-    updatedAt: s.updatedAt || undefined,
-    status: s.status as any,
-    cancellationReason: s.cancellationReason || undefined,
-  }));
+  const rows = await prisma.sale.findMany({ 
+    where, 
+    include: { 
+      items: true,
+      returns: {
+        include: {
+          items: true
+        }
+      },
+      payments: true
+    },
+    orderBy: { saleDate: 'desc' }, 
+    take: dateRange ? PAGE_SIZE : undefined 
+  });
+  
+  // Calculate returnedQuantity for each sale item by aggregating return items
+  const sales: Sale[] = rows.map(s => {
+    // Create a map of (productId, saleType) -> total returned quantity
+    const returnedQuantities = new Map<string, number>();
+    
+    s.returns.forEach(returnTx => {
+      returnTx.items.forEach(returnItem => {
+        // Only count items with lineType 'returned' (not 'exchanged')
+        if (returnItem.lineType === 'returned') {
+          const key = `${returnItem.productId}-${returnItem.saleType}`;
+          returnedQuantities.set(key, (returnedQuantities.get(key) || 0) + returnItem.quantity);
+        }
+      });
+    });
+    
+    // Map sale items with calculated returnedQuantity
+    const items: CartItem[] = s.items.map(item => {
+      const key = `${item.productId}-${item.saleType}`;
+      const returnedQty = returnedQuantities.get(key) || 0;
+      
+      return {
+        id: item.productId,
+        quantity: item.quantity,
+        appliedPrice: Number(item.appliedPrice),
+        saleType: item.saleType as any,
+        name: item.name,
+        category: item.category as any,
+        price: Number(item.price),
+        sku: item.sku || undefined,
+        imageUrl: item.imageUrl || undefined,
+        isOfferItem: item.isOfferItem,
+        returnedQuantity: returnedQty > 0 ? returnedQty : undefined,
+      };
+    });
+    
+    return {
+      id: s.id,
+      items,
+      subTotal: Number(s.subTotal),
+      discountPercentage: Number(s.discountPercentage),
+      discountAmount: Number(s.discountAmount),
+      totalAmount: Number(s.totalAmount),
+      paidAmountCash: s.paidAmountCash ? Number(s.paidAmountCash) : undefined,
+      paidAmountCheque: s.paidAmountCheque ? Number(s.paidAmountCheque) : undefined,
+      chequeDetails: undefined,
+      paidAmountBankTransfer: s.paidAmountBankTransfer ? Number(s.paidAmountBankTransfer) : undefined,
+      bankTransferDetails: undefined,
+      creditUsed: s.creditUsed ? Number(s.creditUsed) : undefined,
+      additionalPayments: s.payments.map(p => ({
+        amount: Number(p.amount),
+        method: p.method as any,
+        date: p.date,
+        staffId: p.staffId,
+        notes: p.notes || undefined,
+        details: p.chequeNumber ? {
+          number: p.chequeNumber,
+          bank: p.chequeBank || undefined,
+          date: p.chequeDate || undefined,
+          amount: p.chequeAmount ? Number(p.chequeAmount) : undefined,
+        } : p.bankName ? {
+          bankName: p.bankName,
+          referenceNumber: p.referenceNumber || undefined,
+          amount: p.bankAmount ? Number(p.bankAmount) : undefined,
+        } : undefined,
+      })),
+      totalAmountPaid: Number(s.totalAmountPaid),
+      outstandingBalance: Number(s.outstandingBalance),
+      initialOutstandingBalance: s.initialOutstandingBalance ? Number(s.initialOutstandingBalance) : undefined,
+      changeGiven: s.changeGiven ? Number(s.changeGiven) : undefined,
+      paymentSummary: s.paymentSummary,
+      saleDate: s.saleDate,
+      staffId: s.staffId,
+      staffName: s.staffName || undefined,
+      customerId: s.customerId || undefined,
+      customerName: s.customerName || undefined,
+      customerShopName: s.customerShopName || undefined,
+      offerApplied: s.offerApplied,
+      vehicleId: s.vehicleId || undefined,
+      createdAt: s.createdAt || undefined,
+      updatedAt: s.updatedAt || undefined,
+      status: s.status as any,
+      cancellationReason: s.cancellationReason || undefined,
+    };
+  });
   return { sales, lastVisible: null };
 };
 

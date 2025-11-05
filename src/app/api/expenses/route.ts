@@ -7,14 +7,18 @@ import { type Expense } from '@/lib/types';
 // GET /api/expenses - Fetch all expenses
 export async function GET(request: NextRequest) {
   try {
-    const rows = await prisma.expense.findMany({ orderBy: { expenseDate: 'desc' } });
-    const expenses: Expense[] = rows.map(e => ({
+    const rows = await prisma.expense.findMany({ 
+      include: { staff: { select: { id: true, name: true } } },
+      orderBy: { expenseDate: 'desc' } 
+    });
+    const expenses = rows.map(e => ({
       id: e.id,
       category: e.category,
       description: e.description || undefined,
       amount: Number(e.amount),
       expenseDate: e.expenseDate,
       staffId: e.staffId || undefined,
+      staffName: e.staff?.name || undefined,
       vehicleId: e.vehicleId || undefined,
       createdAt: e.createdAt || undefined,
     }));
@@ -31,8 +35,24 @@ export async function POST(request: NextRequest) {
   try {
     const expenseData = (await request.json()) as Omit<Expense, 'id' | 'createdAt'>;
     
-    if (!expenseData || !expenseData.category || !expenseData.amount || expenseData.amount <= 0 || !expenseData.staffId) {
-      return NextResponse.json({ error: 'Missing required fields (category, amount, staffId)' }, { status: 400 });
+    if (!expenseData || !expenseData.category || !expenseData.amount || expenseData.amount <= 0) {
+      return NextResponse.json({ error: 'Missing required fields (category, amount)' }, { status: 400 });
+    }
+    
+    // Resolve staffId to a valid user ID (accept id or username); fallback to admin
+    let staffIdFinal: string | null = null;
+    if (expenseData.staffId) {
+      const byId = await prisma.user.findUnique({ where: { id: String(expenseData.staffId) }, select: { id: true } });
+      if (byId) {
+        staffIdFinal = byId.id;
+      } else {
+        const byUsername = await prisma.user.findFirst({ where: { username: { equals: String(expenseData.staffId), mode: 'insensitive' } }, select: { id: true } });
+        if (byUsername) staffIdFinal = byUsername.id;
+      }
+    }
+    if (!staffIdFinal) {
+      const admin = await prisma.user.findFirst({ where: { username: { equals: 'admin', mode: 'insensitive' } }, select: { id: true } });
+      if (admin) staffIdFinal = admin.id;
     }
     
     // Ensure date is handled correctly and include optional vehicleId
@@ -48,12 +68,18 @@ export async function POST(request: NextRequest) {
         description: finalExpenseData.description ?? null,
         amount: finalExpenseData.amount,
         expenseDate: finalExpenseData.expenseDate,
-        staffId: finalExpenseData.staffId ?? null,
+        staffId: staffIdFinal,
         vehicleId: finalExpenseData.vehicleId ?? null,
       },
-      select: { id: true },
+      include: { staff: { select: { id: true, name: true } } },
     });
-    return NextResponse.json({ id: created.id, ...finalExpenseData }, { status: 201 });
+    
+    return NextResponse.json({ 
+      id: created.id, 
+      ...finalExpenseData, 
+      staffId: created.staffId || undefined,
+      staffName: created.staff?.name || undefined,
+    }, { status: 201 });
   } catch (error) {
     console.error('Error adding expense:', error);
     const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';

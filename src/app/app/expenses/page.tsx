@@ -276,7 +276,7 @@ export default function ExpensesPage() {
                                 {expense.staffId && (
                                     <p className="text-xs text-purple-600 font-medium flex items-center gap-1 mt-1">
                                         <UserCircle className="h-3 w-3"/>
-                                        {expense.staffId}
+                                        {expense.staffName || expense.staffId}
                                     </p>
                                 )}
                             </div>
@@ -313,7 +313,7 @@ export default function ExpensesPage() {
                             {expense.staffId ? (
                                 <span className="flex items-center gap-1 text-sm">
                                     <UserCircle className="h-3.5 w-3.5 text-muted-foreground"/>
-                                    {expense.staffId}
+                                    {expense.staffName || expense.staffId}
                                 </span>
                             ) : 'N/A'}
                         </TableCell>

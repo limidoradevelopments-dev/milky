@@ -1,29 +1,9 @@
+export const runtime = 'nodejs';
 
 import { NextResponse, type NextRequest } from 'next/server';
-import { db } from '@/lib/firebase';
-import { 
-  doc, 
-  runTransaction, 
-  collection, 
-  Timestamp, 
-  increment,
-  arrayUnion
-} from 'firebase/firestore';
+import prisma from '@/lib/prisma';
 import { format } from 'date-fns';
-import { 
-  saleConverter, 
-  productConverter, 
-  stockTransactionConverter, 
-  returnTransactionConverter,
-  type CartItem,
-  type ChequeInfo,
-  type BankTransferInfo,
-  type Payment,
-  type FirestorePayment,
-  type StockTransaction,
-  type ReturnTransaction
-} from '@/lib/types';
-
+import type { CartItem, ChequeInfo, BankTransferInfo } from '@/lib/types';
 
 interface ReturnRequestBody {
   saleId: string;
@@ -47,39 +27,72 @@ interface ReturnRequestBody {
 }
 
 async function generateCustomReturnId(): Promise<string> {
-    const today = new Date();
-    const datePart = format(today, "yyMMdd");
-    const counterRef = doc(db, "counters", "returns");
+  const today = new Date();
+  const datePart = format(today, "yyMMdd");
   
-    const newCount = await runTransaction(db, async (transaction) => {
-      const counterDoc = await transaction.get(counterRef);
-      if (!counterDoc.exists() || !counterDoc.data()?.count) {
-        transaction.set(counterRef, { count: 1 });
-        return 1;
+  // Get the latest return for today or initialize counter
+  const latestReturn = await prisma.returnTransaction.findFirst({
+    where: {
+      id: {
+        startsWith: `RET-${datePart}-`
       }
-      const newCount = counterDoc.data().count + 1;
-      transaction.update(counterRef, { count: newCount });
-      return newCount;
-    });
+    },
+    orderBy: {
+      id: 'desc'
+    }
+  });
   
-    return `RET-${datePart}-${String(newCount).padStart(4, '0')}`;
+  let newCount = 1;
+  if (latestReturn) {
+    const lastIdPart = latestReturn.id.split('-').pop();
+    if (lastIdPart) {
+      const lastCount = parseInt(lastIdPart, 10);
+      if (!isNaN(lastCount)) {
+        newCount = lastCount + 1;
+      }
+    }
+  }
+  
+  return `RET-${datePart}-${String(newCount).padStart(4, '0')}`;
 }
 
+// Helper to resolve staffId to a valid user ID
+async function resolveStaffId(staffId: string | undefined): Promise<string | null> {
+  if (!staffId) return null;
+  
+  // Try by ID first
+  const byId = await prisma.user.findUnique({ where: { id: String(staffId) }, select: { id: true } });
+  if (byId) return byId.id;
+  
+  // Try by username
+  const byUsername = await prisma.user.findFirst({ 
+    where: { username: { equals: String(staffId), mode: 'insensitive' } }, 
+    select: { id: true } 
+  });
+  if (byUsername) return byUsername.id;
+  
+  // Fallback to admin
+  const admin = await prisma.user.findFirst({ 
+    where: { username: { equals: 'admin', mode: 'insensitive' } }, 
+    select: { id: true } 
+  });
+  return admin ? admin.id : null;
+}
 
 export async function POST(request: NextRequest) {
   try {
     const body: ReturnRequestBody = await request.json();
     const { 
-        saleId, 
-        staffId,
-        customerId,
-        customerName,
-        customerShopName,
-        settleOutstandingAmount,
-        refundAmount,
-        cashPaidOut,
-        payment,
-        vehicleId,
+      saleId, 
+      staffId,
+      customerId,
+      customerName,
+      customerShopName,
+      settleOutstandingAmount,
+      refundAmount,
+      cashPaidOut,
+      payment,
+      vehicleId,
     } = body;
     
     const returnedItems = Array.isArray(body.returnedItems) ? body.returnedItems : [];
@@ -88,154 +101,239 @@ export async function POST(request: NextRequest) {
     if (!saleId || !staffId) {
       return NextResponse.json({ error: 'Invalid request body. Missing required fields.' }, { status: 400 });
     }
-     if (returnedItems.length === 0 && exchangedItems.length === 0 && !refundAmount && !cashPaidOut && !settleOutstandingAmount) {
+    
+    if (returnedItems.length === 0 && exchangedItems.length === 0 && !refundAmount && !cashPaidOut && !settleOutstandingAmount) {
       return NextResponse.json({ error: 'Cannot process an empty transaction with no financial impact.' }, { status: 400 });
     }
 
+    // Resolve staffId
+    const staffIdFinal = await resolveStaffId(staffId);
+    if (!staffIdFinal) {
+      return NextResponse.json({ error: 'Could not resolve staff user' }, { status: 400 });
+    }
+
     const returnId = await generateCustomReturnId();
-    let finalReturnData: ReturnTransaction | null = null;
-  
-    await runTransaction(db, async (transaction) => {
+    
+    // Use Prisma transaction for atomicity
+    const result = await prisma.$transaction(async (tx) => {
       // 1. READ ORIGINAL SALE
-      const saleRef = doc(db, 'sales', saleId).withConverter(saleConverter);
-      const saleDoc = await transaction.get(saleRef);
-      if (!saleDoc.exists()) {
+      const sale = await tx.sale.findUnique({
+        where: { id: saleId },
+        include: { items: true, returns: { include: { items: true } } }
+      });
+      
+      if (!sale) {
         throw new Error(`Sale with ID ${saleId} not found.`);
       }
-      const currentSaleData = saleDoc.data();
 
       // 2. SETTLE OUTSTANDING BALANCE IF APPLICABLE
       if (settleOutstandingAmount && settleOutstandingAmount > 0) {
-        if (currentSaleData.outstandingBalance < settleOutstandingAmount) {
-          throw new Error(`Cannot settle ${settleOutstandingAmount}. Outstanding balance is only ${currentSaleData.outstandingBalance}.`);
+        if (Number(sale.outstandingBalance) < settleOutstandingAmount) {
+          throw new Error(`Cannot settle ${settleOutstandingAmount}. Outstanding balance is only ${sale.outstandingBalance}.`);
         }
-        const creditPayment: Payment = {
-          amount: settleOutstandingAmount,
-          method: 'ReturnCredit',
-          date: new Date(),
-          staffId: staffId,
-          notes: `Credit from Return ID: ${returnId}`
-        };
         
-        const firestorePayment: FirestorePayment = { ...creditPayment, date: Timestamp.fromDate(creditPayment.date) };
-        transaction.update(saleRef, {
-          outstandingBalance: increment(-settleOutstandingAmount),
-          totalAmountPaid: increment(settleOutstandingAmount),
-          additionalPayments: arrayUnion(firestorePayment)
+        // Create a payment record for the credit
+        await tx.payment.create({
+          data: {
+            saleId: saleId,
+            amount: settleOutstandingAmount,
+            method: 'ReturnCredit' as any,
+            date: new Date(),
+            notes: `Credit from Return ID: ${returnId}`,
+            staffId: staffIdFinal,
+          },
+        });
+        
+        // Update sale balances
+        await tx.sale.update({
+          where: { id: saleId },
+          data: {
+            outstandingBalance: Number(sale.outstandingBalance) - settleOutstandingAmount,
+            totalAmountPaid: Number(sale.totalAmountPaid) + settleOutstandingAmount,
+          },
         });
       }
 
       // 3. HANDLE STOCK & SALE ITEM UPDATES
-      const newSaleItems = [...currentSaleData.items];
-      
       // Handle exchanged items (stock out)
       for (const item of exchangedItems) {
-        const productRef = doc(db, 'products', item.id);
-        if (!vehicleId) { // Main inventory exchange
-          transaction.update(productRef, { stock: increment(-item.quantity) });
-        } else { // Vehicle exchange
-          const stockTx: Omit<StockTransaction, 'id'> = {
-            productId: item.id, productName: item.name, productSku: item.sku,
-            type: 'UNLOAD_FROM_VEHICLE', quantity: item.quantity,
-            previousStock: -1, newStock: -1, // Not tracked directly here; relies on aggregate
-            transactionDate: new Date(), notes: `Exchange in Return: ${returnId}`,
-            vehicleId, userId: staffId,
-          };
-          const txDocRef = doc(collection(db, "stockTransactions"));
-          transaction.set(txDocRef, stockTransactionConverter.toFirestore({id: 'temp', ...stockTx}));
+        const product = await tx.product.findUnique({ where: { id: item.id } });
+        if (!product) {
+          throw new Error(`Product with ID ${item.id} not found.`);
+        }
+        
+        if (!vehicleId) {
+          // Main inventory exchange - reduce stock
+          await tx.product.update({
+            where: { id: item.id },
+            data: { stock: product.stock - item.quantity }
+          });
+        } else {
+          // Vehicle exchange - create stock transaction
+          await tx.stockTransaction.create({
+            data: {
+              productId: item.id,
+              productName: item.name,
+              productSku: item.sku || null,
+              type: 'UNLOAD_FROM_VEHICLE' as any,
+              quantity: item.quantity,
+              previousStock: product.stock,
+              newStock: product.stock,
+              transactionDate: new Date(),
+              notes: `Exchange in Return: ${returnId}`,
+              vehicleId: vehicleId,
+              userId: staffIdFinal,
+            },
+          });
         }
       }
 
       // Handle returned items (stock in)
       for (const item of returnedItems) {
+        // Verify the item exists in the sale
+        const saleItem = sale.items.find(si => si.productId === item.id && si.saleType === item.saleType);
+        if (!saleItem) {
+          throw new Error(`Item ${item.name} not found in original sale.`);
+        }
+        
+        // Calculate already returned quantity from existing return transactions
+        const alreadyReturned = sale.returns.reduce((sum, ret) => {
+          return sum + ret.items
+            .filter(ri => ri.productId === item.id && ri.saleType === item.saleType && ri.lineType === 'returned')
+            .reduce((itemSum, ri) => itemSum + ri.quantity, 0);
+        }, 0);
+        
+        if ((alreadyReturned + item.quantity) > saleItem.quantity) {
+          throw new Error(`Cannot return ${item.quantity} of ${item.name}. Already returned: ${alreadyReturned}, Max: ${saleItem.quantity}`);
+        }
+        
+        // Update stock if resellable
         if (item.isResellable) {
-          const productRef = doc(db, 'products', item.id);
-          if (vehicleId) { // Return to vehicle
-            const stockTx: Omit<StockTransaction, 'id'> = {
-              productId: item.id, productName: item.name, productSku: item.sku,
-              type: 'LOAD_TO_VEHICLE', quantity: item.quantity,
-              previousStock: -1, newStock: -1, // Not tracked directly here
-              transactionDate: new Date(), notes: `Resellable return to vehicle. Return ID: ${returnId}`,
-              vehicleId, userId: staffId,
-            };
-            const txDocRef = doc(collection(db, "stockTransactions"));
-            transaction.set(txDocRef, stockTransactionConverter.toFirestore({id: 'temp', ...stockTx}));
-          } else { // Return to main inventory
-            transaction.update(productRef, { stock: increment(item.quantity) });
+          const product = await tx.product.findUnique({ where: { id: item.id } });
+          if (!product) {
+            throw new Error(`Product with ID ${item.id} not found.`);
+          }
+          
+          if (vehicleId) {
+            // Return to vehicle - create stock transaction
+            await tx.stockTransaction.create({
+              data: {
+                productId: item.id,
+                productName: item.name,
+                productSku: item.sku || null,
+                type: 'LOAD_TO_VEHICLE' as any,
+                quantity: item.quantity,
+                previousStock: product.stock,
+                newStock: product.stock,
+                transactionDate: new Date(),
+                notes: `Resellable return to vehicle. Return ID: ${returnId}`,
+                vehicleId: vehicleId,
+                userId: staffIdFinal,
+              },
+            });
+          } else {
+            // Return to main inventory - increase stock
+            await tx.product.update({
+              where: { id: item.id },
+              data: { stock: product.stock + item.quantity }
+            });
           }
         }
-        
-        const saleItemIndex = newSaleItems.findIndex(si => si.id === item.id && si.saleType === item.saleType);
-        if (saleItemIndex === -1) throw new Error(`Item ${item.name} not found in original sale.`);
-        
-        const originalSaleItem = newSaleItems[saleItemIndex];
-        const alreadyReturned = originalSaleItem.returnedQuantity || 0;
-        if ((alreadyReturned + item.quantity) > originalSaleItem.quantity) {
-          throw new Error(`Cannot return ${item.quantity} of ${originalSaleItem.name}. Already returned: ${alreadyReturned}, Max: ${originalSaleItem.quantity}`);
-        }
-        newSaleItems[saleItemIndex] = { ...originalSaleItem, returnedQuantity: alreadyReturned + item.quantity };
       }
-      
-      // Defensively rebuild the items array to ensure no `undefined` values are saved.
-      const finalSaleItems = newSaleItems.map(item => {
-        const cleanItem: CartItem = {
-          id: item.id,
-          quantity: item.quantity,
-          appliedPrice: item.appliedPrice,
-          saleType: item.saleType,
-          name: item.name,
-          category: item.category,
-          price: item.price,
-          isOfferItem: item.isOfferItem || false,
-          returnedQuantity: item.returnedQuantity || 0,
-        };
-        // Only include SKU if it exists
-        if (item.sku) {
-          cleanItem.sku = item.sku;
-        }
-        return cleanItem;
+
+      // 4. CREATE RETURN TRANSACTION
+      const returnTransaction = await tx.returnTransaction.create({
+        data: {
+          id: returnId,
+          originalSaleId: saleId,
+          returnDate: new Date(),
+          staffId: staffIdFinal,
+          customerId: customerId || null,
+          customerName: customerName || null,
+          customerShopName: customerShopName || null,
+          notes: `Return/Exchange for Sale ${saleId}`,
+          amountPaid: payment?.amountPaid || null,
+          paymentSummary: payment?.paymentSummary || null,
+          changeGiven: payment?.changeGiven || null,
+          settleOutstandingAmount: settleOutstandingAmount || null,
+          refundAmount: refundAmount || null,
+          cashPaidOut: cashPaidOut || null,
+          chequeNumber: payment?.chequeDetails?.number || null,
+          chequeBank: payment?.chequeDetails?.bank || null,
+          chequeDate: payment?.chequeDetails?.date ? new Date(payment.chequeDetails.date) : null,
+          chequeAmount: payment?.chequeDetails?.amount || null,
+          bankName: payment?.bankTransferDetails?.bankName || null,
+          referenceNumber: payment?.bankTransferDetails?.referenceNumber || null,
+          bankAmount: payment?.bankTransferDetails?.amount || null,
+          items: {
+            create: [
+              ...returnedItems.map(item => ({
+                lineType: 'returned' as any,
+                productId: item.id,
+                quantity: item.quantity,
+                appliedPrice: item.appliedPrice,
+                saleType: item.saleType as any,
+                name: item.name,
+                category: item.category as any,
+                price: item.price,
+                sku: item.sku || null,
+                isOfferItem: item.isOfferItem || false,
+              })),
+              ...exchangedItems.map(item => ({
+                lineType: 'exchanged' as any,
+                productId: item.id,
+                quantity: item.quantity,
+                appliedPrice: item.appliedPrice,
+                saleType: item.saleType as any,
+                name: item.name,
+                category: item.category as any,
+                price: item.price,
+                sku: item.sku || null,
+                isOfferItem: item.isOfferItem || false,
+              })),
+            ],
+          },
+        },
+        include: { items: true },
       });
 
-      // 4. WRITE UPDATED SALE AND NEW RETURN DOCUMENT
-      transaction.update(saleRef, {
-        items: finalSaleItems.map(item => ({...item})), // Spread to satisfy Firestore type checks
-        updatedAt: Timestamp.now(),
-      });
-
-      const returnDocRef = doc(db, 'returns', returnId);
-      
-      // Carefully construct the final return data to avoid any 'undefined' values
-      finalReturnData = {
-        id: returnId,
-        originalSaleId: saleId,
-        returnDate: new Date(),
-        staffId,
-        returnedItems: returnedItems,
-        exchangedItems: exchangedItems,
-        customerId: customerId || undefined,
-        customerName: customerName || undefined,
-        customerShopName: customerShopName || undefined,
-        settleOutstandingAmount: settleOutstandingAmount || undefined,
-        refundAmount: refundAmount || undefined,
-        cashPaidOut: cashPaidOut || undefined,
-        amountPaid: payment?.amountPaid,
-        paymentSummary: payment?.paymentSummary,
-        changeGiven: payment?.changeGiven,
-        chequeDetails: payment?.chequeDetails,
-        bankTransferDetails: payment?.bankTransferDetails,
-      };
-
-      transaction.set(returnDocRef, returnTransactionConverter.toFirestore(finalReturnData));
+      return returnTransaction;
     });
 
-    if (!finalReturnData) {
-        throw new Error("Transaction failed and return data could not be constructed.");
-    }
-    
+    // Build response
+    const returnData = {
+      id: result.id,
+      originalSaleId: result.originalSaleId,
+      returnDate: result.returnDate,
+      staffId: result.staffId,
+      returnedItems: returnedItems,
+      exchangedItems: exchangedItems,
+      customerId: result.customerId || undefined,
+      customerName: result.customerName || undefined,
+      customerShopName: result.customerShopName || undefined,
+      settleOutstandingAmount: result.settleOutstandingAmount ? Number(result.settleOutstandingAmount) : undefined,
+      refundAmount: result.refundAmount ? Number(result.refundAmount) : undefined,
+      cashPaidOut: result.cashPaidOut ? Number(result.cashPaidOut) : undefined,
+      amountPaid: result.amountPaid ? Number(result.amountPaid) : undefined,
+      paymentSummary: result.paymentSummary || undefined,
+      changeGiven: result.changeGiven ? Number(result.changeGiven) : undefined,
+      chequeDetails: result.chequeNumber ? {
+        number: result.chequeNumber,
+        bank: result.chequeBank || undefined,
+        date: result.chequeDate || undefined,
+        amount: result.chequeAmount ? Number(result.chequeAmount) : undefined,
+      } : undefined,
+      bankTransferDetails: result.bankName ? {
+        bankName: result.bankName,
+        referenceNumber: result.referenceNumber || undefined,
+        amount: result.bankAmount ? Number(result.bankAmount) : undefined,
+      } : undefined,
+    };
+
     return NextResponse.json({ 
-        message: 'Return/Exchange processed successfully and stock updated.', 
-        returnId,
-        returnData: finalReturnData
+      message: 'Return/Exchange processed successfully and stock updated.', 
+      returnId,
+      returnData
     });
 
   } catch (error) {

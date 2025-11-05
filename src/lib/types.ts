@@ -219,6 +219,7 @@ export interface Expense {
     amount: number;
     expenseDate: Date;
     staffId?: string;
+    staffName?: string;
     vehicleId?: string;
     createdAt?: Date;
 }

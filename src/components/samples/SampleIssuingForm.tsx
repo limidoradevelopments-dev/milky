@@ -93,7 +93,6 @@ export function SampleIssuingForm() {
     setNotes("");
     setSelectedVehicleId(undefined);
     setSelectedCustomerId(undefined);
-    setVehicleStock(null);
   };
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
