@@ -1,54 +1,95 @@
 
-import { db, checkFirebase } from "./firebase";
-import { Timestamp, collection, addDoc, getDocs, query, where, orderBy, onSnapshot } from 'firebase/firestore';
+import prisma from "./prisma";
 import { 
-  stockTransactionConverter, 
   StockTransaction,
-  FirestoreStockTransaction
 } from "./types";
 
 export const StockService = {
   async createTransaction(transaction: Omit<StockTransaction, 'id'>): Promise<string> {
-    checkFirebase();
-    const docRef = await addDoc(
-      collection(db, 'stockTransactions').withConverter(stockTransactionConverter as any),
-      transaction
-    );
-    return docRef.id;
+    const created = await prisma.stockTransaction.create({
+      data: {
+        productId: transaction.productId,
+        productName: transaction.productName,
+        productSku: transaction.productSku ?? null,
+        type: transaction.type as any,
+        quantity: transaction.quantity,
+        previousStock: transaction.previousStock,
+        newStock: transaction.newStock,
+        transactionDate: transaction.transactionDate,
+        notes: transaction.notes ?? null,
+        vehicleId: transaction.vehicleId ?? null,
+        userId: transaction.userId ?? null,
+        startMeter: transaction.startMeter ?? null,
+        endMeter: transaction.endMeter ?? null,
+      },
+      select: { id: true },
+    });
+    return created.id;
   },
 
   async getAllTransactions(): Promise<StockTransaction[]> {
-    checkFirebase();
-    const q = query(
-      collection(db, 'stockTransactions').withConverter(stockTransactionConverter as any),
-      orderBy('transactionDate', 'desc')
-    );
-    const snapshot = await getDocs(q);
-    return snapshot.docs.map(doc => doc.data() as StockTransaction);
+    const rows = await prisma.stockTransaction.findMany({ orderBy: { transactionDate: 'desc' } });
+    return rows.map(t => ({
+      id: t.id,
+      productId: t.productId,
+      productName: t.productName,
+      productSku: t.productSku || undefined,
+      type: t.type as StockTransaction["type"],
+      quantity: t.quantity,
+      previousStock: t.previousStock,
+      newStock: t.newStock,
+      transactionDate: t.transactionDate,
+      notes: t.notes || undefined,
+      vehicleId: t.vehicleId || undefined,
+      userId: t.userId || undefined,
+      startMeter: t.startMeter || undefined,
+      endMeter: t.endMeter || undefined,
+    }));
   },
 
   async getTransactionsByProduct(productId: string): Promise<StockTransaction[]> {
-    checkFirebase();
-    const q = query(
-      collection(db, 'stockTransactions').withConverter(stockTransactionConverter as any),
-      where('productId', '==', productId),
-      orderBy('transactionDate', 'desc')
-    );
-    
-    const snapshot = await getDocs(q);
-    return snapshot.docs.map(doc => doc.data() as StockTransaction);
+    const rows = await prisma.stockTransaction.findMany({
+      where: { productId },
+      orderBy: { transactionDate: 'desc' },
+    });
+    return rows.map(t => ({
+      id: t.id,
+      productId: t.productId,
+      productName: t.productName,
+      productSku: t.productSku || undefined,
+      type: t.type as StockTransaction["type"],
+      quantity: t.quantity,
+      previousStock: t.previousStock,
+      newStock: t.newStock,
+      transactionDate: t.transactionDate,
+      notes: t.notes || undefined,
+      vehicleId: t.vehicleId || undefined,
+      userId: t.userId || undefined,
+      startMeter: t.startMeter || undefined,
+      endMeter: t.endMeter || undefined,
+    }));
   },
 
   async getTransactionsByVehicleId(vehicleId: string): Promise<StockTransaction[]> {
-    checkFirebase();
-    const q = query(
-      collection(db, 'stockTransactions').withConverter(stockTransactionConverter as any),
-      where('vehicleId', '==', vehicleId)
-    );
-    
-    const snapshot = await getDocs(q);
-    const transactions = snapshot.docs.map(doc => doc.data() as StockTransaction);
-    // Sorting on the client side to avoid needing a composite index
-    return transactions.sort((a, b) => b.transactionDate.getTime() - a.transactionDate.getTime());
+    const rows = await prisma.stockTransaction.findMany({
+      where: { vehicleId },
+      orderBy: { transactionDate: 'desc' },
+    });
+    return rows.map(t => ({
+      id: t.id,
+      productId: t.productId,
+      productName: t.productName,
+      productSku: t.productSku || undefined,
+      type: t.type as StockTransaction["type"],
+      quantity: t.quantity,
+      previousStock: t.previousStock,
+      newStock: t.newStock,
+      transactionDate: t.transactionDate,
+      notes: t.notes || undefined,
+      vehicleId: t.vehicleId || undefined,
+      userId: t.userId || undefined,
+      startMeter: t.startMeter || undefined,
+      endMeter: t.endMeter || undefined,
+    }));
   },
 };

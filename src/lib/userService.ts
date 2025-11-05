@@ -1,82 +1,72 @@
-import { db, checkFirebase } from "./firebase";
-import {
-  collection,
-  addDoc,
-  getDocs,
-  doc,
-  updateDoc,
-  deleteDoc,
-  query,
-  where,
-  getDoc,
-  Timestamp
-} from "firebase/firestore";
-import { userConverter, type FirestoreUser, type User } from "./types";
+import prisma from "./prisma";
+import { type User } from "./types";
 
 export const UserService = {
   async getAllUsers(): Promise<User[]> {
-    checkFirebase();
-    const q = query(collection(db, 'users')).withConverter(userConverter);
-    const snapshot = await getDocs(q);
-    return snapshot.docs.map(doc => doc.data());
+    const users = await prisma.user.findMany();
+    return users.map(u => ({
+      id: u.id,
+      username: u.username,
+      name: u.name,
+      role: u.role as User["role"],
+      password_hashed_or_plain: u.password_hashed_or_plain || undefined,
+    }));
   },
 
   async getUserById(id: string): Promise<User | null> {
-    checkFirebase();
-    const docRef = doc(db, 'users', id).withConverter(userConverter);
-    const snapshot = await getDoc(docRef);
-    return snapshot.exists() ? snapshot.data() : null;
+    const u = await prisma.user.findUnique({ where: { id } });
+    return u
+      ? {
+          id: u.id,
+          username: u.username,
+          name: u.name,
+          role: u.role as User["role"],
+          password_hashed_or_plain: u.password_hashed_or_plain || undefined,
+        }
+      : null;
   },
 
   async getUserByUsername(username: string): Promise<User | null> {
-    checkFirebase();
-    const q = query(
-      collection(db, 'users').withConverter(userConverter),
-      where('username', '==', username)
-    );
-    const snapshot = await getDocs(q);
-    if (snapshot.empty) {
-      return null;
-    }
-    return snapshot.docs[0].data();
+    const u = await prisma.user.findUnique({ where: { username } });
+    return u
+      ? {
+          id: u.id,
+          username: u.username,
+          name: u.name,
+          role: u.role as User["role"],
+          password_hashed_or_plain: u.password_hashed_or_plain || undefined,
+        }
+      : null;
   },
 
   async createUser(userData: Omit<User, 'id'>): Promise<string> {
-    checkFirebase();
-    const existingUser = await this.getUserByUsername(userData.username);
-    if (existingUser) {
-        throw new Error("Username already exists.");
-    }
-    
-    // Create a temporary full user object for the converter
-    const tempUserForConversion: User = {
-        id: 'temp', // This won't be saved
-        ...userData
-    };
-    
-    const dataWithTimestamp = userConverter.toFirestore(tempUserForConversion);
-    
-    const usersCollection = collection(db, 'users');
-    const docRef = await addDoc(usersCollection, dataWithTimestamp);
-    return docRef.id;
+    const existing = await prisma.user.findUnique({ where: { username: userData.username } });
+    if (existing) throw new Error("Username already exists.");
+    const created = await prisma.user.create({
+      data: {
+        username: userData.username,
+        name: userData.name,
+        role: userData.role,
+        password_hashed_or_plain: userData.password_hashed_or_plain ?? null,
+      },
+      select: { id: true },
+    });
+    return created.id;
   },
 
   async updateUser(id: string, userData: Partial<Omit<User, 'id'>>): Promise<void> {
-    checkFirebase();
-    const docRef = doc(db, 'users', id);
-    const dataToUpdate: any = {
-      ...userData,
-      updatedAt: Timestamp.now()
-    };
-    if (userData.password_hashed_or_plain === undefined) {
-      delete dataToUpdate.password_hashed_or_plain;
-    }
-    await updateDoc(docRef, dataToUpdate);
+    await prisma.user.update({
+      where: { id },
+      data: {
+        username: userData.username,
+        name: userData.name,
+        role: userData.role,
+        password_hashed_or_plain: userData.password_hashed_or_plain,
+      },
+    });
   },
   
   async deleteUser(id: string): Promise<void> {
-    checkFirebase();
-    const docRef = doc(db, 'users', id);
-    await deleteDoc(docRef);
+    await prisma.user.delete({ where: { id } });
   },
 };

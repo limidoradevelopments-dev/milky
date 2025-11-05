@@ -1,8 +1,7 @@
 
 import { NextResponse, type NextRequest } from 'next/server';
-import { db } from '@/lib/firebase';
-import { collection, query, where, getDocs, limit } from 'firebase/firestore';
-import { productConverter, type Product } from '@/lib/types';
+import prisma from '@/lib/prisma';
+import { type Product } from '@/lib/types';
 
 export const revalidate = 300; // cache for 5 minutes
 
@@ -14,26 +13,50 @@ export async function GET(request: NextRequest) {
   const searchLimit = 50;
 
   try {
-    const productsCol = collection(db, 'products').withConverter(productConverter);
-    
-    let q;
-    
+    let results: Product[] = [];
     if (ids && ids.length > 0) {
-      q = query(productsCol, where('__name__', 'in', ids.slice(0, 30)));
+      const rows = await prisma.product.findMany({ where: { id: { in: ids.slice(0, 30) } } });
+      results = rows.map(p => ({
+        id: p.id,
+        name: p.name,
+        category: p.category as Product['category'],
+        price: Number(p.price),
+        wholesalePrice: p.wholesalePrice ? Number(p.wholesalePrice) : undefined,
+        stock: p.stock,
+        imageUrl: p.imageUrl || undefined,
+        description: p.description || undefined,
+        sku: p.sku || undefined,
+        reorderLevel: p.reorderLevel || undefined,
+        aiHint: p.aiHint || undefined,
+        createdAt: p.createdAt || undefined,
+        updatedAt: p.updatedAt || undefined,
+      }));
     } else {
-      const constraints = [];
+      const where: any = {};
+      if (category) where.category = category as any;
       if (searchTerm) {
-        constraints.push(where('name', '>=', searchTerm), where('name', '<=', searchTerm + '\uf8ff'));
+        where.OR = [
+          { name: { contains: searchTerm, mode: 'insensitive' } },
+          { sku: { contains: searchTerm, mode: 'insensitive' } },
+        ];
       }
-      if (category) {
-        constraints.push(where('category', '==', category));
-      }
-      constraints.push(limit(searchLimit));
-      q = query(productsCol, ...constraints as any);
+      const rows = await prisma.product.findMany({ where, take: searchLimit });
+      results = rows.map(p => ({
+        id: p.id,
+        name: p.name,
+        category: p.category as Product['category'],
+        price: Number(p.price),
+        wholesalePrice: p.wholesalePrice ? Number(p.wholesalePrice) : undefined,
+        stock: p.stock,
+        imageUrl: p.imageUrl || undefined,
+        description: p.description || undefined,
+        sku: p.sku || undefined,
+        reorderLevel: p.reorderLevel || undefined,
+        aiHint: p.aiHint || undefined,
+        createdAt: p.createdAt || undefined,
+        updatedAt: p.updatedAt || undefined,
+      }));
     }
-
-    const querySnapshot = await getDocs(q);
-    const results = querySnapshot.docs.map(doc => doc.data());
     
     return NextResponse.json(results);
 

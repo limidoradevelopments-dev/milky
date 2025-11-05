@@ -1,8 +1,7 @@
 
 import { NextResponse, type NextRequest } from 'next/server';
-import { db } from '@/lib/firebase';
-import { collection, query, where, getDocs, limit } from 'firebase/firestore';
-import { customerConverter, type Customer } from '@/lib/types';
+import prisma from '@/lib/prisma';
+import { type Customer } from '@/lib/types';
 
 export const revalidate = 60; // Re-add server-side caching for 60 seconds
 
@@ -19,46 +18,50 @@ export async function GET(request: NextRequest) {
   const isNumeric = /^\d+$/.test(searchTerm);
   
   try {
-    const customersCol = collection(db, 'customers').withConverter(customerConverter);
-    
-    const queries = [];
-
+    let results: Customer[] = [];
     if (isNumeric) {
-      const phoneQuery = query(
-          customersCol,
-          where('phone', '>=', lowerCaseSearchTerm),
-          where('phone', '<=', lowerCaseSearchTerm + '\uf8ff'),
-          limit(searchLimit)
-      );
-      queries.push(getDocs(phoneQuery));
-
+      const rows = await prisma.customer.findMany({
+        where: { phone: { contains: lowerCaseSearchTerm, mode: 'insensitive' }, status: { not: 'pending' as any } },
+        take: searchLimit,
+      });
+      results = rows.map(c => ({
+        id: c.id,
+        avatar: c.avatar || undefined,
+        name: c.name,
+        phone: c.phone,
+        address: c.address || undefined,
+        shopName: c.shopName || undefined,
+        status: c.status as Customer['status'],
+        createdAt: c.createdAt || undefined,
+        updatedAt: c.updatedAt || undefined,
+        name_lowercase: c.name_lowercase || undefined,
+        shopName_lowercase: c.shopName_lowercase || undefined,
+      }));
     } else {
-      const nameQuery = query(
-          customersCol, 
-          where('name_lowercase', '>=', lowerCaseSearchTerm),
-          where('name_lowercase', '<=', lowerCaseSearchTerm + '\uf8ff'),
-          limit(searchLimit)
-      );
-      const shopNameQuery = query(
-          customersCol,
-          where('shopName_lowercase', '>=', lowerCaseSearchTerm),
-          where('shopName_lowercase', '<=', lowerCaseSearchTerm + '\uf8ff'),
-          limit(searchLimit)
-      );
-      queries.push(getDocs(nameQuery), getDocs(shopNameQuery));
+      const rows = await prisma.customer.findMany({
+        where: {
+          status: { not: 'pending' as any },
+          OR: [
+            { name_lowercase: { startsWith: lowerCaseSearchTerm } },
+            { shopName_lowercase: { startsWith: lowerCaseSearchTerm } },
+          ],
+        },
+        take: searchLimit,
+      });
+      results = rows.map(c => ({
+        id: c.id,
+        avatar: c.avatar || undefined,
+        name: c.name,
+        phone: c.phone,
+        address: c.address || undefined,
+        shopName: c.shopName || undefined,
+        status: c.status as Customer['status'],
+        createdAt: c.createdAt || undefined,
+        updatedAt: c.updatedAt || undefined,
+        name_lowercase: c.name_lowercase || undefined,
+        shopName_lowercase: c.shopName_lowercase || undefined,
+      }));
     }
-
-    const querySnapshots = await Promise.all(queries);
-
-    const customersMap = new Map<string, Customer>();
-
-    querySnapshots.forEach(snapshot => {
-        snapshot.docs.forEach(doc => {
-            if(doc.data().status !== 'pending') customersMap.set(doc.id, doc.data());
-        });
-    });
-    
-    const results = Array.from(customersMap.values());
     
     return NextResponse.json(results);
 

@@ -1,70 +1,59 @@
 
 
-import { db, checkFirebase } from "./firebase";
-import { 
-  collection, 
-  addDoc, 
-  getDocs, 
-  doc, 
-  updateDoc, 
-  deleteDoc, 
-  query, 
-  onSnapshot,
-  getDoc,
-  Timestamp
-} from "firebase/firestore";
-import { vehicleConverter, FirestoreVehicle, Vehicle } from "./types";
+import prisma from "./prisma";
+import { Vehicle } from "./types";
 
 export const VehicleService = {
   async getAllVehicles(): Promise<Vehicle[]> {
-    checkFirebase();
-    const q = query(collection(db, 'vehicles')).withConverter(vehicleConverter);
-    const snapshot = await getDocs(q);
-    return snapshot.docs.map(doc => doc.data());
+    const vehicles = await prisma.vehicle.findMany();
+    return vehicles.map(v => ({
+      id: v.id,
+      vehicleNumber: v.vehicleNumber,
+      driverName: v.driverName || undefined,
+      notes: v.notes || undefined,
+      createdAt: v.createdAt || undefined,
+      updatedAt: v.updatedAt || undefined,
+    }));
   },
 
   async getVehicleById(id: string): Promise<Vehicle | null> {
-    checkFirebase();
-    const docRef = doc(db, 'vehicles', id).withConverter(vehicleConverter);
-    const snapshot = await getDoc(docRef);
-    return snapshot.exists() ? snapshot.data() : null;
+    const v = await prisma.vehicle.findUnique({ where: { id } });
+    return v
+      ? {
+          id: v.id,
+          vehicleNumber: v.vehicleNumber,
+          driverName: v.driverName || undefined,
+          notes: v.notes || undefined,
+          createdAt: v.createdAt || undefined,
+          updatedAt: v.updatedAt || undefined,
+        }
+      : null;
   },
 
   async createVehicle(vehicleData: Omit<Vehicle, 'id'>): Promise<string> {
-    checkFirebase();
-    
-    // Manually construct the data for creation to ensure type safety and no undefined values.
-    const dataToCreate: { [key: string]: any } = {
-      vehicleNumber: vehicleData.vehicleNumber,
-      createdAt: Timestamp.now(),
-      updatedAt: Timestamp.now()
-    };
-
-    if (vehicleData.driverName) dataToCreate.driverName = vehicleData.driverName;
-    if (vehicleData.notes) dataToCreate.notes = vehicleData.notes;
-
-    const docRef = await addDoc(collection(db, 'vehicles'), dataToCreate);
-    return docRef.id;
+    const created = await prisma.vehicle.create({
+      data: {
+        vehicleNumber: vehicleData.vehicleNumber,
+        driverName: vehicleData.driverName ?? null,
+        notes: vehicleData.notes ?? null,
+      },
+      select: { id: true },
+    });
+    return created.id;
   },
 
   async updateVehicle(id: string, vehicleData: Partial<Omit<Vehicle, 'id'>>): Promise<void> {
-    checkFirebase();
-    const docRef = doc(db, 'vehicles', id);
-    
-    // Explicitly build the update object to avoid passing undefined.
-    const dataToUpdate: { [key: string]: any } = {
-      updatedAt: Timestamp.now()
-    };
-    if (vehicleData.vehicleNumber !== undefined) dataToUpdate.vehicleNumber = vehicleData.vehicleNumber;
-    if (vehicleData.driverName !== undefined) dataToUpdate.driverName = vehicleData.driverName;
-    if (vehicleData.notes !== undefined) dataToUpdate.notes = vehicleData.notes;
-
-    await updateDoc(docRef, dataToUpdate);
+    await prisma.vehicle.update({
+      where: { id },
+      data: {
+        vehicleNumber: vehicleData.vehicleNumber,
+        driverName: vehicleData.driverName,
+        notes: vehicleData.notes,
+      },
+    });
   },
 
   async deleteVehicle(id: string): Promise<void> {
-    checkFirebase();
-    const docRef = doc(db, 'vehicles', id);
-    await deleteDoc(docRef);
+    await prisma.vehicle.delete({ where: { id } });
   },
 };

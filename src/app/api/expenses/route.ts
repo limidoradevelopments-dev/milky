@@ -1,16 +1,22 @@
 
 import { NextResponse, type NextRequest } from 'next/server';
-import { db } from '@/lib/firebase';
-import { collection, addDoc, getDocs, doc, deleteDoc, Timestamp, query, orderBy } from 'firebase/firestore';
-import { expenseConverter, type Expense } from '@/lib/types';
+import prisma from '@/lib/prisma';
+import { type Expense } from '@/lib/types';
 
 // GET /api/expenses - Fetch all expenses
 export async function GET(request: NextRequest) {
   try {
-    const expensesCol = collection(db, "expenses").withConverter(expenseConverter);
-    const q = query(expensesCol, orderBy("expenseDate", "desc"));
-    const expenseSnapshot = await getDocs(q);
-    const expenses = expenseSnapshot.docs.map(doc => doc.data());
+    const rows = await prisma.expense.findMany({ orderBy: { expenseDate: 'desc' } });
+    const expenses: Expense[] = rows.map(e => ({
+      id: e.id,
+      category: e.category,
+      description: e.description || undefined,
+      amount: Number(e.amount),
+      expenseDate: e.expenseDate,
+      staffId: e.staffId || undefined,
+      vehicleId: e.vehicleId || undefined,
+      createdAt: e.createdAt || undefined,
+    }));
     return NextResponse.json(expenses);
   } catch (error) {
     console.error('Error fetching expenses:', error);
@@ -35,9 +41,18 @@ export async function POST(request: NextRequest) {
         vehicleId: expenseData.vehicleId || undefined,
     };
 
-    const docRef = await addDoc(collection(db, "expenses").withConverter(expenseConverter), finalExpenseData);
-    
-    return NextResponse.json({ id: docRef.id, ...finalExpenseData }, { status: 201 });
+    const created = await prisma.expense.create({
+      data: {
+        category: finalExpenseData.category,
+        description: finalExpenseData.description ?? null,
+        amount: finalExpenseData.amount,
+        expenseDate: finalExpenseData.expenseDate,
+        staffId: finalExpenseData.staffId ?? null,
+        vehicleId: finalExpenseData.vehicleId ?? null,
+      },
+      select: { id: true },
+    });
+    return NextResponse.json({ id: created.id, ...finalExpenseData }, { status: 201 });
   } catch (error) {
     console.error('Error adding expense:', error);
     const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';
@@ -55,7 +70,7 @@ export async function DELETE(request: NextRequest) {
     }
 
     try {
-        await deleteDoc(doc(db, "expenses", expenseId));
+        await prisma.expense.delete({ where: { id: expenseId } });
         return NextResponse.json({ message: 'Expense deleted successfully' });
     } catch (error) {
         console.error('Error deleting expense:', error);
