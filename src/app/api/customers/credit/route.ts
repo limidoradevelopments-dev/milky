@@ -1,31 +1,23 @@
 
+export const runtime = 'nodejs';
 import { NextResponse, type NextRequest } from 'next/server';
-import { db } from '@/lib/firebase';
-import { collection, query, where, getDocs } from 'firebase/firestore';
-import { returnTransactionConverter, saleConverter } from '@/lib/types';
+import prisma from '@/lib/prisma';
 
 async function calculateAvailableCredit(customerId: string): Promise<number> {
-    const salesQuery = query(
-        collection(db, 'sales'), 
-        where('customerId', '==', customerId)
-    );
-    const returnsQuery = query(
-        collection(db, 'returns'), 
-        where('customerId', '==', customerId)
-    );
+  const [returnsAgg, salesAgg] = await Promise.all([
+    prisma.returnTransaction.aggregate({
+      _sum: { refundAmount: true },
+      where: { customerId },
+    }),
+    prisma.sale.aggregate({
+      _sum: { creditUsed: true },
+      where: { customerId },
+    }),
+  ]);
 
-    const [salesSnapshot, returnsSnapshot] = await Promise.all([
-        getDocs(salesQuery.withConverter(saleConverter)),
-        getDocs(returnsQuery.withConverter(returnTransactionConverter))
-    ]);
-
-    // Credit added to a customer's account from a return is a positive value in refundAmount
-    const totalRefundsNet = returnsSnapshot.docs.reduce((sum, doc) => sum + (doc.data().refundAmount || 0), 0);
-    
-    // Credit used in a sale is a debit from their credit pool
-    const totalCreditUsedOnSales = salesSnapshot.docs.reduce((sum, doc) => sum + (doc.data().creditUsed || 0), 0);
-    
-    return totalRefundsNet - totalCreditUsedOnSales;
+  const totalRefundsNet = Number(returnsAgg._sum.refundAmount ?? 0);
+  const totalCreditUsedOnSales = Number(salesAgg._sum.creditUsed ?? 0);
+  return totalRefundsNet - totalCreditUsedOnSales;
 }
 
 export async function GET(request: NextRequest) {

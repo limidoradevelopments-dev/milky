@@ -26,6 +26,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useSalesData } from "@/hooks/useSalesData";
 import { useProducts } from "@/hooks/useProducts"; // Import the useProducts hook
+import { useVehicleStock } from "@/hooks/useVehicleStock";
 
 // Helper function to reconcile offer items in the cart
 function reconcileOfferItems(
@@ -109,9 +110,15 @@ export default function SalesPage() {
 
   // New states for vehicle stock view
   const [viewMode, setViewMode] = useState<'main' | 'vehicle'>(isCashier ? 'vehicle' : 'main');
-  const [vehicleStock, setVehicleStock] = useState<Product[] | null>(null);
-  const [isVehicleStockLoading, setIsVehicleStockLoading] = useState(false);
   const [selectedVehicleId, setSelectedVehicleId] = useState<string | null>(null);
+  
+  const { vehicleStock: vehicleStockMap, isLoading: isVehicleStockLoading, refetch: refetchVehicleStock } = useVehicleStock(
+    selectedVehicleId || undefined,
+    viewMode === 'vehicle' && !!selectedVehicleId
+  );
+  
+  // Convert vehicle stock map to products array for display
+  const [vehicleStock, setVehicleStock] = useState<Product[] | null>(null);
 
   const { toast } = useToast();
   const isMobile = useMediaQuery("(max-width: 768px)");
@@ -204,83 +211,48 @@ export default function SalesPage() {
   };
 
 
+  // Convert vehicle stock map to products array when map or products change
+  useEffect(() => {
+    const updateVehicleStockProducts = async () => {
+      if (!vehicleStockMap || !selectedVehicleId) {
+        setVehicleStock(null);
+        return;
+      }
+
+      const stockIds = Array.from(vehicleStockMap.keys());
+      if (stockIds.length === 0) {
+        setVehicleStock([]);
+        return;
+      }
+
+      try {
+        const productDetailsResponse = await fetch(`/api/products/search?ids=${stockIds.join(',')}`);
+        if (!productDetailsResponse.ok) throw new Error("Could not fetch vehicle product details.");
+        const vehicleProductDetails: Product[] = await productDetailsResponse.json();
+
+        const vehicleProducts: Product[] = [];
+        for (const product of vehicleProductDetails) {
+          const vehicleQty = vehicleStockMap.get(product.id);
+          if (vehicleQty && vehicleQty > 0) {
+            vehicleProducts.push({ ...product, stock: vehicleQty });
+          }
+        }
+        setVehicleStock(vehicleProducts);
+      } catch (error: any) {
+        console.error(error);
+        setVehicleStock([]);
+      }
+    };
+
+    updateVehicleStockProducts();
+  }, [vehicleStockMap, selectedVehicleId]);
+
   const handleFetchVehicleStock = async (vehicleId: string) => {
     if (!vehicleId) {
-      setVehicleStock(null);
       setSelectedVehicleId(null);
       return;
     }
-
-    setIsVehicleStockLoading(true);
-    setVehicleStock(null);
     setSelectedVehicleId(vehicleId);
-    
-    const cacheKey = `vehicleStock_${vehicleId}`;
-    const cachedData = sessionStorage.getItem(cacheKey);
-
-    if (cachedData) {
-        setVehicleStock(JSON.parse(cachedData));
-        setIsVehicleStockLoading(false);
-        return;
-    }
-
-    const targetVehicle = vehicles.find(v => v.id === vehicleId);
-
-    if (!targetVehicle) {
-      toast({ variant: "destructive", title: "Error", description: `Vehicle not found.` });
-      setIsVehicleStockLoading(false);
-      return;
-    }
-
-    try {
-      const response = await fetch(`/api/stock-transactions?vehicleId=${targetVehicle.id}`);
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        const message = errorData.details || errorData.error || 'Failed to fetch vehicle stock data.';
-        throw new Error(message);
-      }
-      const transactions: StockTransaction[] = await response.json();
-
-      if (transactions.length === 0) {
-        setVehicleStock([]);
-        setIsVehicleStockLoading(false);
-        return;
-      }
-      
-      const stockMap = new Map<string, number>();
-      transactions.forEach(tx => {
-        const currentQty = stockMap.get(tx.productId) || 0;
-        if (tx.type === 'LOAD_TO_VEHICLE') {
-          stockMap.set(tx.productId, currentQty + tx.quantity);
-        } else if (tx.type === 'UNLOAD_FROM_VEHICLE' || tx.type === 'ISSUE_SAMPLE') {
-          stockMap.set(tx.productId, currentQty - tx.quantity);
-        }
-      });
-      
-      const stockIds = Array.from(stockMap.keys());
-      const productDetailsResponse = await fetch(`/api/products/search?ids=${stockIds.join(',')}`);
-      if(!productDetailsResponse.ok) throw new Error("Could not fetch vehicle product details.");
-      const vehicleProductDetails: Product[] = await productDetailsResponse.json();
-
-
-      const vehicleProducts: Product[] = [];
-      for (const product of vehicleProductDetails) {
-          const vehicleQty = stockMap.get(product.id);
-          if(vehicleQty && vehicleQty > 0) {
-              vehicleProducts.push({ ...product, stock: vehicleQty });
-          }
-      }
-      
-      setVehicleStock(vehicleProducts);
-      sessionStorage.setItem(cacheKey, JSON.stringify(vehicleProducts));
-
-    } catch (error: any) {
-      console.error(error);
-      toast({ variant: "destructive", title: "Error", description: error.message || "Could not load vehicle stock." });
-      setVehicleStock([]);
-    } finally {
-      setIsVehicleStockLoading(false);
-    }
   };
 
   const productsForDisplay = viewMode === 'vehicle' ? vehicleStock : filteredProducts;
@@ -515,9 +487,9 @@ export default function SalesPage() {
       handleCancelOrder(); 
       await fetchProducts();
       
+      // Refetch vehicle stock immediately after sale from vehicle
       if (viewMode === 'vehicle' && selectedVehicleId) {
-        sessionStorage.removeItem(`vehicleStock_${selectedVehicleId}`);
-        await handleFetchVehicleStock(selectedVehicleId);
+        await refetchVehicleStock();
       }
       return newSaleResponse;
 
@@ -650,8 +622,9 @@ export default function SalesPage() {
                       checked={viewMode === 'vehicle'}
                       onCheckedChange={(checked) => {
                         setViewMode(checked ? 'vehicle' : 'main');
-                        setVehicleStock(null);
-                        setSelectedVehicleId(null);
+                        if (!checked) {
+                          setSelectedVehicleId(null);
+                        }
                       }}
                       aria-label="Toggle View Mode"
                     />

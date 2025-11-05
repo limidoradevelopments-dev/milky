@@ -19,6 +19,7 @@ import type { Product, StockTransaction, Customer, Vehicle } from "@/lib/types";
 import { useProducts } from "@/hooks/useProducts";
 import { useVehicles } from "@/hooks/useVehicles";
 import { useCustomers } from "@/hooks/useCustomers";
+import { useVehicleStock } from "@/hooks/useVehicleStock";
 import { Input } from "../ui/input";
 
 interface SampleItem {
@@ -52,46 +53,17 @@ export function SampleIssuingForm() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const { toast } = useToast();
 
-  const [vehicleStock, setVehicleStock] = useState<Map<string, number> | null>(null);
-  const [isVehicleStockLoading, setIsVehicleStockLoading] = useState(false);
+  const { vehicleStock, isLoading: isVehicleStockLoading, refetch: refetchVehicleStock } = useVehicleStock(
+    selectedVehicleId,
+    !!selectedVehicleId
+  );
 
   const selectableCustomers = useMemo(() => customers.filter(c => c.status === 'pending' || c.status === 'active'), [customers]);
   
-  const fetchVehicleStock = async (vehicleId: string) => {
-    if (!vehicleId) {
-      setVehicleStock(null);
-      return;
-    }
-    setIsVehicleStockLoading(true);
-    setVehicleStock(null);
-    setSampleItems([]); // Clear items when vehicle changes
-    try {
-      const response = await fetch(`/api/stock-transactions?vehicleId=${vehicleId}`);
-      if (!response.ok) throw new Error('Failed to fetch vehicle stock data.');
-      
-      const transactions: StockTransaction[] = await response.json();
-      
-      const stockMap = new Map<string, number>();
-      transactions.forEach(tx => {
-        const currentQty = stockMap.get(tx.productId) || 0;
-        if (tx.type === 'LOAD_TO_VEHICLE') {
-          stockMap.set(tx.productId, currentQty + tx.quantity);
-        } else if (tx.type === 'UNLOAD_FROM_VEHICLE' || tx.type === 'ISSUE_SAMPLE') {
-          stockMap.set(tx.productId, currentQty - tx.quantity);
-        }
-      });
-      setVehicleStock(stockMap);
-    } catch (error) {
-      toast({ variant: "destructive", title: "Error", description: "Could not load vehicle stock." });
-      setVehicleStock(null);
-    } finally {
-      setIsVehicleStockLoading(false);
-    }
-  };
-
+  // Clear sample items when vehicle changes
   useEffect(() => {
     if (selectedVehicleId) {
-      fetchVehicleStock(selectedVehicleId);
+      setSampleItems([]);
     }
   }, [selectedVehicleId]);
 
@@ -193,6 +165,10 @@ export function SampleIssuingForm() {
       });
       
       resetForm();
+      // Refetch vehicle stock immediately after issuing samples
+      if (selectedVehicleId) {
+        await refetchVehicleStock();
+      }
 
     } catch (error) {
       console.error("Error issuing samples:", error);

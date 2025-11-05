@@ -8,8 +8,8 @@ import type { Sale, CartItem, ChequeInfo, BankTransferInfo } from '@/lib/types';
 // GET /api/sales - Fetch all sales
 export async function GET(request: NextRequest) {
   try {
-    const sales = await getSales();
-    return NextResponse.json(sales);
+    const result = await getSales();
+    return NextResponse.json(result.sales);
   } catch (error) {
     console.error('Error fetching sales:', error);
     const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';

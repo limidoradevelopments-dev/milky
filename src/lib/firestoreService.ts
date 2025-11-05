@@ -200,6 +200,24 @@ async function generateCustomSaleId(): Promise<string> {
 
 export const addSale = async (saleData: Omit<Sale, 'id'>): Promise<string> => {
   const newCustomId = await generateCustomSaleId();
+  // Resolve a valid staff user ID (accept id or username); fallback to admin (create if missing)
+  const resolveStaffId = async (input?: string): Promise<string> => {
+    // Try exact id
+    if (input) {
+      const byId = await prisma.user.findUnique({ where: { id: String(input) }, select: { id: true } });
+      if (byId) return byId.id;
+      // Try by username (case-insensitive)
+      const byUsername = await prisma.user.findFirst({ where: { username: { equals: String(input), mode: 'insensitive' } }, select: { id: true } });
+      if (byUsername) return byUsername.id;
+    }
+    // Fallback to admin
+    const existingAdmin = await prisma.user.findFirst({ where: { username: { equals: 'admin', mode: 'insensitive' } }, select: { id: true } });
+    if (existingAdmin) return existingAdmin.id;
+    // Create admin if not exists
+    const createdAdmin = await prisma.user.create({ data: { username: 'admin', name: 'Administrator', role: 'admin', password_hashed_or_plain: null }, select: { id: true } });
+    return createdAdmin.id;
+  };
+  const staffIdFinal = await resolveStaffId(saleData.staffId);
   await prisma.$transaction(async (tx) => {
     // stock adjustments
     const productQuantities = new Map<string, number>();
@@ -224,7 +242,7 @@ export const addSale = async (saleData: Omit<Sale, 'id'>): Promise<string> => {
             transactionDate: saleData.saleDate,
             notes: `Sale: ${newCustomId}`,
             vehicleId: saleData.vehicleId,
-            userId: saleData.staffId,
+            userId: staffIdFinal,
           },
         });
       } else {
@@ -241,7 +259,7 @@ export const addSale = async (saleData: Omit<Sale, 'id'>): Promise<string> => {
         customerId: saleData.customerId ?? null,
         customerName: saleData.customerName ?? null,
         customerShopName: saleData.customerShopName ?? null,
-        staffId: saleData.staffId,
+        staffId: staffIdFinal,
         staffName: saleData.staffName ?? null,
         vehicleId: saleData.vehicleId ?? null,
         saleDate: saleData.saleDate,
@@ -282,6 +300,7 @@ export const addSale = async (saleData: Omit<Sale, 'id'>): Promise<string> => {
     // additional payments
     if (saleData.additionalPayments && saleData.additionalPayments.length > 0) {
       for (const p of saleData.additionalPayments) {
+        const paymentStaffId = await resolveStaffId(p.staffId || staffIdFinal);
         await tx.payment.create({
           data: {
             saleId: newCustomId,
@@ -289,7 +308,7 @@ export const addSale = async (saleData: Omit<Sale, 'id'>): Promise<string> => {
             method: p.method as any,
             date: p.date,
             notes: p.notes ?? null,
-            staffId: p.staffId,
+            staffId: paymentStaffId,
             chequeNumber: (p.details as any)?.number ?? null,
             chequeBank: (p.details as any)?.bank ?? null,
             chequeDate: (p.details as any)?.date ?? null,

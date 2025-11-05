@@ -1,11 +1,12 @@
+export const runtime = 'nodejs';
 import { NextResponse, type NextRequest } from 'next/server';
 import { getReturns } from '@/lib/firestoreService';
 
 // GET /api/returns/history - Fetch all return transactions
 export async function GET(request: NextRequest) {
   try {
-    const returns = await getReturns();
-    return NextResponse.json(returns);
+    const result = await getReturns();
+    return NextResponse.json(result.returns);
   } catch (error) {
     console.error('Error fetching return transactions:', error);
     const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';

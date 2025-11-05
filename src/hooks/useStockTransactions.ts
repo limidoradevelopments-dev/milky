@@ -5,29 +5,15 @@ import { useState, useEffect, useCallback } from "react";
 import type { StockTransaction } from "@/lib/types";
 import { useToast } from "@/hooks/use-toast";
 import type { DateRange } from "react-day-picker";
-import { query, collection, orderBy, where, limit, getDocs, startAfter, QueryDocumentSnapshot } from 'firebase/firestore';
-import { db } from "@/lib/firebase";
-import { stockTransactionConverter } from "@/lib/types";
+import type { QueryDocumentSnapshot } from 'firebase/firestore';
 
 const PAGE_SIZE = 50;
 
-async function getStockTransactions(lastVisible?: QueryDocumentSnapshot<StockTransaction>, dateRange?: DateRange): Promise<{ transactions: StockTransaction[], lastVisible: QueryDocumentSnapshot<StockTransaction> | null }> {
-  const transCol = collection(db, 'stockTransactions').withConverter(stockTransactionConverter as any);
-  
-  const constraints = [orderBy("transactionDate", "desc")];
-  if(dateRange?.from) constraints.push(where("transactionDate", ">=", dateRange.from));
-  if(dateRange?.to) constraints.push(where("transactionDate", "<=", dateRange.to));
-  if (lastVisible) constraints.push(startAfter(lastVisible));
-  constraints.push(limit(PAGE_SIZE));
-
-  const q = query(transCol, ...constraints);
-  
-  const snapshot = await getDocs(q);
-  
-  const transactions = snapshot.docs.map(doc => doc.data());
-  const newLastVisible = snapshot.docs[snapshot.docs.length - 1] || null;
-
-  return { transactions, lastVisible: newLastVisible };
+async function getStockTransactions(_lastVisible?: QueryDocumentSnapshot<StockTransaction>, _dateRange?: DateRange): Promise<{ transactions: StockTransaction[], lastVisible: QueryDocumentSnapshot<StockTransaction> | null }> {
+  const res = await fetch('/api/stock-transactions');
+  if (!res.ok) throw new Error('Failed to fetch stock transactions');
+  const transactions: StockTransaction[] = await res.json();
+  return { transactions, lastVisible: null };
 }
 
 export function useStockTransactions(fetchAll: boolean = false, dateRange?: DateRange) {

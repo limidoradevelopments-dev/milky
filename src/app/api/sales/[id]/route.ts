@@ -1,16 +1,14 @@
 
+export const runtime = 'nodejs';
 import { NextResponse, type NextRequest } from 'next/server';
-import { db } from '@/lib/firebase';
-import { doc, runTransaction, Timestamp, arrayUnion, collection } from 'firebase/firestore';
-import { saleConverter, type Sale, type Payment, type FirestorePayment, type ChequeInfo, type BankTransferInfo, stockTransactionConverter, productConverter } from '@/lib/types';
-import { getAuth } from "firebase-admin/auth";
-import { adminApp } from '@/lib/firebase-admin'; // Ensure you have this
+import prisma from '@/lib/prisma';
+import type { Sale, Payment } from '@/lib/types';
 
 export async function PATCH(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  context: { params: Promise<{ id: string }> }
 ) {
-  const saleId = params.id;
+  const { id: saleId } = await context.params;
 
   if (!saleId) {
     return NextResponse.json({ error: 'Sale ID is required' }, { status: 400 });
@@ -28,41 +26,18 @@ export async function PATCH(
       return NextResponse.json({ error: 'Staff ID is required for payment record' }, { status: 400 });
     }
 
-    const saleRef = doc(db, 'sales', saleId).withConverter(saleConverter);
-
-    const updatedSaleData = await runTransaction(db, async (transaction) => {
-        const saleDoc = await transaction.get(saleRef);
-        if (!saleDoc.exists()) {
-            throw new Error('Sale not found');
-        }
-
-        const currentSale = saleDoc.data();
+    // Fetch current sale
+    const currentSaleRow = await prisma.sale.findUnique({ where: { id: saleId } });
+    if (!currentSaleRow) {
+      return NextResponse.json({ error: 'Sale not found' }, { status: 404 });
+    }
+    const currentSale: any = currentSaleRow;
         
         // This is the object that will be pushed to the Firestore array.
         // It must be clean of `undefined` values.
-        const paymentForFirestore: Partial<FirestorePayment> = {
-            amount: paymentAmount,
-            method: paymentMethod,
-            date: paymentDate ? Timestamp.fromDate(new Date(paymentDate)) : Timestamp.now(),
-            staffId: staffId,
-        };
+        // Normalize new payment (client-facing only)
         
-        if (notes) {
-            paymentForFirestore.notes = notes;
-        }
-
-        if (details) {
-            // Firestore requires nested Timestamps to be explicitly created.
-            // When details are stringified from client, date becomes an ISO string.
-            if (paymentMethod === 'Cheque' && details.date) {
-                paymentForFirestore.details = { 
-                    ...details, 
-                    date: Timestamp.fromDate(new Date(details.date)) 
-                };
-            } else {
-                paymentForFirestore.details = details;
-            }
-        }
+        // details/notes only used to render summary; DB persists in payments table
         
         const totalAmountPaid = (currentSale.totalAmountPaid || 0) + paymentAmount;
         const newOutstandingBalance = currentSale.totalAmount - totalAmountPaid;
@@ -109,10 +84,35 @@ export async function PATCH(
             updatedAt: Timestamp.now()
         };
         
-        transaction.update(saleRef, updatedData as any);
+        // Persist a new payment row (optional; depends on your flow)
+        await prisma.payment.create({
+          data: {
+            saleId: saleId,
+            amount: paymentAmount,
+            method: paymentMethod,
+            date: paymentDate ? new Date(paymentDate) : new Date(),
+            notes: notes ?? null,
+            staffId: staffId,
+            chequeNumber: (details as any)?.number ?? null,
+            chequeBank: (details as any)?.bank ?? null,
+            chequeDate: (details as any)?.date ? new Date((details as any).date) : null,
+            chequeAmount: (details as any)?.amount ?? null,
+            bankName: (details as any)?.bankName ?? null,
+            referenceNumber: (details as any)?.referenceNumber ?? null,
+            bankAmount: (details as any)?.amount ?? null,
+          },
+        });
+
+        await prisma.sale.update({
+          where: { id: saleId },
+          data: {
+            totalAmountPaid,
+            outstandingBalance: updatedData.outstandingBalance,
+            paymentSummary: updatedData.paymentSummary,
+          },
+        });
 
         // This is the object that will be returned to the client.
-        // It should have JS Date objects.
         const newPaymentForClient: Partial<Payment> = {
             amount: paymentAmount,
             method: paymentMethod,
@@ -121,8 +121,6 @@ export async function PATCH(
         };
         if (notes) newPaymentForClient.notes = notes;
         if (details) newPaymentForClient.details = details;
-
-
         const finalSaleState: Sale = {
             ...currentSale,
             totalAmountPaid: updatedData.totalAmountPaid,
@@ -130,10 +128,7 @@ export async function PATCH(
             paymentSummary: updatedData.paymentSummary, // Return new summary to client
             additionalPayments: [...(currentSale.additionalPayments || []), newPaymentForClient as Payment]
         }
-        return finalSaleState;
-    });
-
-    return NextResponse.json(updatedSaleData);
+    return NextResponse.json(finalSaleState);
 
   } catch (error) {
     console.error(`Error adding payment to sale ${saleId}:`, error);
@@ -145,9 +140,9 @@ export async function PATCH(
 // DELETE /api/sales/{id} - Cancel an invoice
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  context: { params: Promise<{ id: string }> }
 ) {
-  const saleId = params.id;
+  const { id: saleId } = await context.params;
   if (!saleId) {
     return NextResponse.json({ error: 'Sale ID is required' }, { status: 400 });
   }
@@ -160,82 +155,65 @@ export async function DELETE(
       return NextResponse.json({ error: 'Cancellation reason is required' }, { status: 400 });
     }
 
+    const sale = await prisma.sale.findUnique({ where: { id: saleId }, include: { items: true } });
+    if (!sale) return NextResponse.json({ error: 'Sale not found' }, { status: 404 });
+    if (sale.status === 'cancelled') return NextResponse.json({ error: 'This invoice has already been cancelled.' }, { status: 400 });
 
-    await runTransaction(db, async (transaction) => {
-      const saleRef = doc(db, 'sales', saleId).withConverter(saleConverter);
-      
-      // --- READ PHASE ---
-      // Read the sale document first.
-      const saleDoc = await transaction.get(saleRef);
-      if (!saleDoc.exists()) {
-        throw new Error('Sale not found.');
+    await prisma.$transaction(async (tx) => {
+      // Resolve a valid user id for audit on stock transactions; default to admin when needed
+      let userIdFinal: string | null = sale.staffId || null;
+      if (userIdFinal) {
+        const exists = await tx.user.findUnique({ where: { id: userIdFinal }, select: { id: true } });
+        if (!exists) userIdFinal = null;
       }
-      const saleData = saleDoc.data();
-
-      // Check if it's already cancelled before proceeding.
-      if (saleData.status === 'cancelled') {
-        throw new Error('This invoice has already been cancelled.');
+      if (!userIdFinal) {
+        const admin = await tx.user.findFirst({ where: { username: { equals: 'admin', mode: 'insensitive' } }, select: { id: true } });
+        userIdFinal = admin ? admin.id : null;
       }
 
-      // Prepare to read all necessary product documents.
-      const productReads: Promise<any>[] = [];
-      const productRefs: { ref: any, item: any }[] = [];
-
-      for (const item of saleData.items) {
-        const productRef = doc(db, 'products', item.id).withConverter(productConverter);
-        productRefs.push({ ref: productRef, item });
-        productReads.push(transaction.get(productRef));
-      }
-      
-      // Execute all product document reads.
-      const productDocs = await Promise.all(productReads);
-
-      // --- WRITE PHASE ---
-      // Now that all reads are done, we can proceed with writes.
-
-      // 1. Reverse stock changes
-      for (let i = 0; i < productDocs.length; i++) {
-        const productDoc = productDocs[i];
-        const { ref: productRef, item } = productRefs[i];
-        
-        if (saleData.vehicleId) {
-          // If it was a vehicle sale, create a stock transaction to "LOAD" stock back.
-          if (!productDoc.exists()) {
-             throw new Error(`Product with ID ${item.id} not found.`);
-          }
-          const stockTx = {
-            productId: item.id,
-            productName: item.name,
-            productSku: item.sku,
-            type: 'LOAD_TO_VEHICLE' as const,
-            quantity: item.quantity,
-            previousStock: productDoc.data().stock, // main stock is unchanged
-            newStock: productDoc.data().stock, // main stock is unchanged
-            transactionDate: new Date(),
-            notes: `Cancellation of Sale ID: ${saleId}`,
-            vehicleId: saleData.vehicleId,
-            userId: saleData.staffId, // Or a dedicated 'system' user
-          };
-          const txDocRef = doc(collection(db, "stockTransactions"));
-          const firestoreTx = stockTransactionConverter.toFirestore({ id: 'temp', ...stockTx });
-          transaction.set(txDocRef, firestoreTx);
-
-        } else {
-          // If it was a main inventory sale, add the stock back to the product.
-          if (!productDoc.exists()) {
-            throw new Error(`Product ${item.name} not found for stock reversal.`);
-          }
-          const currentStock = productDoc.data().stock;
-          transaction.update(productRef, { stock: currentStock + item.quantity });
+      if (sale.vehicleId) {
+        // Vehicle sale: log stock transaction entries only (main inventory unchanged)
+        for (const item of sale.items) {
+          const p = await tx.product.findUnique({ where: { id: item.productId } });
+          if (!p) throw new Error(`Product with ID ${item.productId} not found.`);
+          await tx.stockTransaction.create({
+            data: {
+              productId: item.productId,
+              productName: p.name,
+              productSku: p.sku,
+              type: 'LOAD_TO_VEHICLE' as any,
+              quantity: item.quantity,
+              previousStock: p.stock,
+              newStock: p.stock,
+              transactionDate: new Date(),
+              notes: `Cancellation of Sale ID: ${saleId}`,
+              vehicleId: sale.vehicleId,
+              userId: userIdFinal,
+            },
+          });
+        }
+      } else {
+        // Main inventory sale: return stock to products
+        for (const item of sale.items) {
+          const p = await tx.product.findUnique({ where: { id: item.productId } });
+          if (!p) throw new Error(`Product with ID ${item.productId} not found for stock reversal.`);
+          await tx.product.update({ where: { id: item.productId }, data: { stock: p.stock + item.quantity } });
         }
       }
 
-      // 2. Update the sale status to 'cancelled'
-      transaction.update(saleRef, {
-        status: 'cancelled',
-        outstandingBalance: 0, // Nullify outstanding balance
-        updatedAt: Timestamp.now(),
-        cancellationReason: cancellationReason,
+      // Remove financial impact of this sale
+      await tx.payment.deleteMany({ where: { saleId } });
+
+      await tx.sale.update({
+        where: { id: saleId },
+        data: {
+          status: 'cancelled',
+          outstandingBalance: 0,
+          totalAmountPaid: 0,
+          creditUsed: 0,
+          paymentSummary: 'Cancelled',
+          cancellationReason: cancellationReason,
+        },
       });
     });
 
