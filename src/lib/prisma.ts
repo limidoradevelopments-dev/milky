@@ -1,5 +1,5 @@
 import 'server-only';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient } from '../generated/client';
 
 
 // Prevent multiple client instances in Next.js dev (hot reload)
