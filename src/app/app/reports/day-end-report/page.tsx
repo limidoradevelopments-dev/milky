@@ -42,10 +42,10 @@ export default function DayEndReportPage() {
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(new Date());
   const [reportSummary, setReportSummary] = useState<DayEndReportSummary | null>(null);
 
-  const { sales: allSales, isLoading: isLoadingSales, error: salesError } = useSalesData(); 
-  const { returns, isLoading: isLoadingReturns, error: returnsError } = useReturns();
-  const { transactions: allTransactions, isLoading: isLoadingTransactions, error: transactionsError } = useStockTransactions();
-  const { expenses, isLoading: isLoadingExpenses, error: expensesError } = useExpenses();
+  const { sales: allSales, isLoading: isLoadingSales, error: salesError } = useSalesData(true); 
+  const { returns, isLoading: isLoadingReturns, error: returnsError } = useReturns(true);
+  const { transactions: allTransactions, isLoading: isLoadingTransactions, error: transactionsError } = useStockTransactions(true);
+  const { expenses, isLoading: isLoadingExpenses, error: expensesError } = useExpenses(true);
   const { products: allProducts, isLoading: isLoadingProducts, error: productsError } = useProducts();
 
 
@@ -61,12 +61,16 @@ export default function DayEndReportPage() {
       );
 
       // --- Revenue Calculations ---
+      // Gross sales = sum of all items sold (excluding offer items and samples)
       const grossSalesToday = salesToday.reduce((sum, s) => {
         return sum + s.items.reduce((itemSum, item) => {
-          return itemSum + (item.price * item.quantity);
+          // Exclude offer items from gross sales as they are free
+          if (item.isOfferItem) return itemSum;
+          return itemSum + (item.appliedPrice * item.quantity);
         }, 0);
       }, 0);
       
+      // Calculate sample value for reporting purposes (not included in gross sales)
       const totalSampleValue = samplesIssuedToday.reduce((sum, tx) => {
         const product = allProducts.find(p => p.id === tx.productId);
         const sampleValue = product ? tx.quantity * product.price : 0;
@@ -84,13 +88,13 @@ export default function DayEndReportPage() {
           return sum + saleDiscount;
       }, 0);
       
+      // Value of returned goods today - this is the value of items that were returned (not exchanged)
+      // For exchanges, we don't subtract from sales as the customer is getting replacement items
+      // Only subtract the value of items that were actually returned without exchange
       const valueOfReturnedGoodsToday = returnsToday.reduce((sum, r) => {
-        const hasNonResellable = r.returnedItems.some(item => !item.isResellable);
-        if (hasNonResellable) {
-            const exchangeValue = r.exchangedItems.reduce((itemSum, item) => itemSum + (item.appliedPrice * item.quantity), 0);
-            return sum + exchangeValue;
-        }
-        return sum;
+        // Only count returned items (not exchanged items) as they reduce sales
+        const returnedValue = r.returnedItems.reduce((itemSum, item) => itemSum + (item.appliedPrice * item.quantity), 0);
+        return sum + returnedValue;
       }, 0);
 
       // --- Offer Items Calculations ---
@@ -105,7 +109,9 @@ export default function DayEndReportPage() {
           });
       });
       
-      const netSalesToday = grossSalesToday + totalSampleValue - (totalDiscountsToday + valueOfReturnedGoodsToday + totalFreeItemsValue + totalSampleValue);
+      // Net sales = Gross sales - Discounts - Returns - Free items value
+      // Note: Samples are not included in net sales as they are free items
+      const netSalesToday = grossSalesToday - totalDiscountsToday - valueOfReturnedGoodsToday - totalFreeItemsValue;
 
       // --- Cash Flow Calculations ---
       const cashFromTodaySales = salesToday.reduce((sum, s) => sum + (s.paidAmountCash || 0), 0);
@@ -139,8 +145,14 @@ export default function DayEndReportPage() {
       totalChequeIn += chequeFromCreditPayments;
       totalBankTransferIn += bankFromCreditPayments;
       
+      // Total cash paid out for returns (refunds given to customers in cash)
       const totalCashPaidOutForRefunds = returnsToday.reduce((sum, r) => sum + (r.cashPaidOut || 0), 0);
+      
+      // Total expenses paid today (all expenses reduce cash on hand)
       const totalExpensesToday = expensesTodayList.reduce((sum, e) => sum + e.amount, 0);
+      
+      // Net cash in hand = Total cash in - Cash paid out for refunds - Expenses
+      // This is the final cash balance at the end of the day
       const finalNetCashInHand = totalCashIn - totalCashPaidOutForRefunds - totalExpensesToday;
 
       // --- Credit Calculations ---
@@ -154,6 +166,7 @@ export default function DayEndReportPage() {
       const totalReturnsCount = returnsToday.length;
       
       // Returns by exchange (customer exchanges damaged products for new ones - customer may pay difference)
+      // For exchanges, we count the net cash received (amountPaid - changeGiven)
       const returnsByExchange = returnsToday.reduce((sum, r) => {
         if (r.exchangedItems && r.exchangedItems.length > 0) {
           // Exchange value = what customer paid for the exchange (amountPaid - changeGiven)
@@ -164,17 +177,19 @@ export default function DayEndReportPage() {
         return sum;
       }, 0);
       
-      // Returns by refund (credit added to customer account)
+      // Returns by refund (credit added to customer account) - this is money we owe the customer
       const returnsByRefund = returnsToday.reduce((sum, r) => sum + (r.refundAmount || 0), 0);
       
-      // Returns by cash paid out (physical cash given back to customer)
+      // Returns by cash paid out (physical cash given back to customer) - this reduces cash on hand
       const returnsByCashPaidOut = returnsToday.reduce((sum, r) => sum + (r.cashPaidOut || 0), 0);
       
-      // Returns that settled outstanding credit
+      // Returns that settled outstanding credit - this reduces outstanding credit balance
       const returnsByCreditSettled = creditSettledByReturns;
       
-      // Total return value (sum of all return transaction values)
+      // Total return value (sum of all returned items' value - not exchanged items)
+      // This represents the total value of goods that were returned without exchange
       const totalReturnValue = returnsToday.reduce((sum, r) => {
+        // Only count returned items (not exchanged items) as the total return value
         const returnedValue = r.returnedItems.reduce((itemSum, item) => itemSum + (item.appliedPrice * item.quantity), 0);
         return sum + returnedValue;
       }, 0);
@@ -186,7 +201,7 @@ export default function DayEndReportPage() {
       setReportSummary({
         reportDate: selectedDate,
         totalTransactions: salesToday.length,
-        grossSalesValue: grossSalesToday + totalSampleValue,
+        grossSalesValue: grossSalesToday, // Gross sales excludes samples and offer items
         totalDiscountsToday,
         valueOfReturnsToday: valueOfReturnedGoodsToday,
         netSalesValue: netSalesToday,

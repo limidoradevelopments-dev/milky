@@ -12,7 +12,14 @@ const PAGE_SIZE = 50;
 async function getStockTransactions(_lastVisible?: QueryDocumentSnapshot<StockTransaction>, _dateRange?: DateRange): Promise<{ transactions: StockTransaction[], lastVisible: QueryDocumentSnapshot<StockTransaction> | null }> {
   const res = await fetch('/api/stock-transactions');
   if (!res.ok) throw new Error('Failed to fetch stock transactions');
-  const transactions: StockTransaction[] = await res.json();
+  const transactionsData = await res.json();
+  // Convert date strings to Date objects
+  const transactions: StockTransaction[] = transactionsData.map((t: any) => ({
+    ...t,
+    transactionDate: new Date(t.transactionDate),
+    createdAt: t.createdAt ? new Date(t.createdAt) : undefined,
+    updatedAt: t.updatedAt ? new Date(t.updatedAt) : undefined,
+  }));
   return { transactions, lastVisible: null };
 }
 

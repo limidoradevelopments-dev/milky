@@ -26,7 +26,13 @@ export function useReturns(fetchAll: boolean = false, dateRange?: DateRange, sta
       const res = await fetch('/api/returns/history');
       if (!res.ok) throw new Error('Failed to fetch returns');
       const initialReturns = await res.json();
-      setReturns(initialReturns);
+      // Convert date strings to Date objects
+      const processedReturns = initialReturns.map((r: any) => ({
+        ...r,
+        returnDate: new Date(r.returnDate),
+        createdAt: r.createdAt ? new Date(r.createdAt) : undefined,
+      }));
+      setReturns(processedReturns);
       setLastVisible(null);
       setHasMore(false);
     } catch (err: any) {
@@ -49,7 +55,13 @@ export function useReturns(fetchAll: boolean = false, dateRange?: DateRange, sta
       const res = await fetch('/api/returns/history');
       if (!res.ok) throw new Error('Failed to fetch returns');
       const newReturns = await res.json();
-      setReturns(prev => [...prev, ...newReturns]);
+      // Convert date strings to Date objects
+      const processedReturns = newReturns.map((r: any) => ({
+        ...r,
+        returnDate: new Date(r.returnDate),
+        createdAt: r.createdAt ? new Date(r.createdAt) : undefined,
+      }));
+      setReturns(prev => [...prev, ...processedReturns]);
       setLastVisible(null);
       setHasMore(false);
     } catch (err: any) {

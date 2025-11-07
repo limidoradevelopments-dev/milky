@@ -21,7 +21,13 @@ export function useExpenses(initialFetch: boolean = false, dateRange?: DateRange
       const res = await fetch(API_BASE_URL);
       if (!res.ok) throw new Error('Failed to fetch expenses');
       const fetchedExpenses = await res.json();
-      setExpenses(fetchedExpenses);
+      // Convert date strings to Date objects
+      const processedExpenses = fetchedExpenses.map((e: any) => ({
+        ...e,
+        expenseDate: new Date(e.expenseDate),
+        createdAt: e.createdAt ? new Date(e.createdAt) : undefined,
+      }));
+      setExpenses(processedExpenses);
     } catch (err: any) {
       const errorMessage = err.message || "Could not load expenses.";
       setError(errorMessage);
