@@ -60,7 +60,7 @@ export function useVehicleStock(vehicleId: string | undefined, enabled: boolean 
     if (vehicleId && enabled) {
       intervalRef.current = setInterval(() => {
         fetchVehicleStock();
-      }, 5000); // Poll every 5 seconds
+      }, 15000); // Poll every 15 seconds
 
       return () => {
         if (intervalRef.current) {
