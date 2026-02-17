@@ -42,10 +42,14 @@ import { useToast } from "@/hooks/use-toast";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCustomers } from "@/hooks/useCustomers"; // Import the hook
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useDebounce } from "@/hooks/useDebounce";
 
 const getInitials = (name: string) => name.split(" ").map(n => n[0]).join("").toUpperCase();
 
 export function CustomerDataTable() {
+  const [searchTerm, setSearchTerm] = useState("");
+  const debouncedSearchTerm = useDebounce(searchTerm, 500);
+
   const { 
     customers, 
     isLoading: isLoadingCustomers, 
@@ -55,14 +59,13 @@ export function CustomerDataTable() {
     deleteCustomer,
     hasMore,
     loadMoreCustomers,
-  } = useCustomers(true); // Use paginated fetching
+  } = useCustomers(true, debouncedSearchTerm); // Use paginated fetching with search
   
 
   const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
   const [isCustomerDialogOpen, setIsCustomerDialogOpen] = useState(false);
   const [isDeleteAlertOpen, setIsDeleteAlertOpen] = useState(false);
   const [customerToDelete, setCustomerToDelete] = useState<Customer | null>(null);
-  const [searchTerm, setSearchTerm] = useState("");
   const [activeTab, setActiveTab] = useState<'active' | 'pending'>('active');
   const { currentUser } = useAuth();
   const { toast } = useToast();
@@ -171,17 +174,13 @@ export function CustomerDataTable() {
   }, [toast]);
 
   const filteredCustomers = useMemo(() => {
-    return customers
-      .filter(customer => customer.status === activeTab)
-      .filter(customer => {
-        const term = searchTerm.toLowerCase();
-        return (
-          customer.name.toLowerCase().includes(term) ||
-          (customer.shopName && customer.shopName.toLowerCase().includes(term)) ||
-          customer.phone.toLowerCase().includes(term)
-        );
-      });
-  }, [customers, searchTerm, activeTab]);
+    // If searching, return the search results directly (server-side search)
+    if (debouncedSearchTerm && debouncedSearchTerm.length >= 2) {
+      return customers;
+    }
+    // Otherwise, filter the paginated list by status
+    return customers.filter(customer => customer.status === activeTab);
+  }, [customers, activeTab, debouncedSearchTerm]);
 
   const isLoading = isLoadingCustomers && customers.length === 0;
 

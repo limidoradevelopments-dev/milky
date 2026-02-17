@@ -8,7 +8,7 @@ const API_BASE_URL = "/api/customers";
 const CACHE_KEY = "customersCache";
 
 
-export function useCustomers(paginated: boolean = false) {
+export function useCustomers(paginated: boolean = false, searchTerm: string = "") {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -16,7 +16,33 @@ export function useCustomers(paginated: boolean = false) {
   const [hasMore, setHasMore] = useState(true);
   const { toast } = useToast();
 
+  // Search function
+  const searchCustomers = useCallback(async (term: string) => {
+    if (!term || term.length < 2) return;
+    setIsLoading(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/customers/search?q=${encodeURIComponent(term)}`);
+      if (!response.ok) throw new Error('Failed to search customers');
+      const data = await response.json();
+      setCustomers(data);
+      setHasMore(false); // Search results are currently not paginated in the same way
+    } catch (err: any) {
+      const errorMessage = err.message || "An unknown error occurred while searching.";
+      setError(errorMessage);
+      // Don't toast on search error to avoid spamming, just show in UI or log
+      console.error(errorMessage);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
   const refetch = useCallback(async () => {
+    if (searchTerm && searchTerm.length >= 2) {
+      await searchCustomers(searchTerm);
+      return;
+    }
+
     setIsLoading(true);
     setError(null);
     try {
@@ -39,14 +65,19 @@ export function useCustomers(paginated: boolean = false) {
     } finally {
       setIsLoading(false);
     }
-  }, [toast]);
+  }, [toast, searchTerm, searchCustomers]);
 
   const fetchInitialPaginated = useCallback(async () => {
+    if (searchTerm && searchTerm.length >= 2) {
+      await searchCustomers(searchTerm);
+      return;
+    }
+
     setError(null);
     setIsLoading(true);
     setHasMore(true);
 
-    // Load from cache first for instant render
+    // Load from cache first for instant render (only if not searching)
     try {
       const cachedData = localStorage.getItem(CACHE_KEY);
       if (cachedData) {
@@ -79,9 +110,10 @@ export function useCustomers(paginated: boolean = false) {
     } finally {
       setIsLoading(false);
     }
-  }, [toast]);
+  }, [toast, searchTerm, searchCustomers]);
 
   const loadMoreCustomers = useCallback(async () => {
+    if (searchTerm && searchTerm.length >= 2) return; // Disable load more during search
     if (!hasMore || isLoading || !nextCursor) return;
     setIsLoading(true);
     try {
@@ -100,28 +132,35 @@ export function useCustomers(paginated: boolean = false) {
     } finally {
       setIsLoading(false);
     }
-  }, [nextCursor, hasMore, isLoading, toast]);
+  }, [nextCursor, hasMore, isLoading, toast, searchTerm]);
 
 
   useEffect(() => {
     if (paginated) {
       fetchInitialPaginated();
     } else {
+      // Logic for non-paginated (mostly used for dropdowns, might not need search there yet or handled differently)
+      // If we want search in dropdowns, we should verify wherever useCustomers(false) is used.
+      // For now, let's assume non-paginated means "load everything" or "load default"
       const loadData = async () => {
-        try {
-          const cachedData = localStorage.getItem(CACHE_KEY);
-          if (cachedData) {
-            setCustomers(JSON.parse(cachedData));
-            setIsLoading(false);
+        if (searchTerm && searchTerm.length >= 2) {
+          await searchCustomers(searchTerm);
+        } else {
+          try {
+            const cachedData = localStorage.getItem(CACHE_KEY);
+            if (cachedData) {
+              setCustomers(JSON.parse(cachedData));
+              setIsLoading(false);
+            }
+          } catch (e) {
+            console.warn("Could not read customers from cache", e);
           }
-        } catch (e) {
-          console.warn("Could not read customers from cache", e);
+          await refetch();
         }
-        await refetch();
       };
       loadData();
     }
-  }, [paginated, refetch, fetchInitialPaginated]);
+  }, [paginated, refetch, fetchInitialPaginated, searchTerm]); // Added searchTerm dependency
 
 
   const addCustomer = async (customerData: Omit<Customer, "id" | "avatar">): Promise<Customer | null> => {
